@@ -1,5 +1,5 @@
 name:                gore-and-ash-sync
-version:             1.0.0.0
+version:             1.1.0.0
 synopsis:            Gore&Ash module for high level network synchronization
 description:         Please see README.md
 homepage:            https://github.com/Teaspot-Studio/gore-and-ash-sync
@@ -32,13 +32,12 @@ library
                      , containers >= 0.5.6.2
                      , deepseq >= 1.4.1.1
                      , exceptions >= 0.8.0.2
-                     , gore-and-ash >= 1.0.0.0
-                     , gore-and-ash-actor >= 1.0.0.0
-                     , gore-and-ash-logging >= 1.0.0.0
-                     , gore-and-ash-network >= 1.0.0.0
+                     , gore-and-ash >= 1.1.0.0
+                     , gore-and-ash-actor >= 1.1.0.0
+                     , gore-and-ash-logging >= 1.1.0.0
+                     , gore-and-ash-network >= 1.1.0.0
                      , hashable >= 1.2.3.3
                      , mtl >= 2.2.1
-                     , netwire >= 5.0.1
                      , text >= 1.2.2.0
                      , unordered-containers >= 0.2.5.1
                      

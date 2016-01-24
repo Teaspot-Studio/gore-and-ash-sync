@@ -1,3 +1,12 @@
+{-|
+Module      : Game.GoreAndAsh.Sync.Remote.Collection
+Description : Automatic synchronization of collection of actors
+Copyright   : (c) Anton Gushcha, 2015-2016
+License     : BSD3
+Maintainer  : ncrashed@gmail.com
+Stability   : experimental
+Portability : POSIX
+-}
 module Game.GoreAndAsh.Sync.Remote.Collection(
     RemActorCollId(..)
   , remoteActorCollectionServer
@@ -20,6 +29,8 @@ import qualified Data.Sequence as S
 
 import Game.GoreAndAsh
 import Game.GoreAndAsh.Actor
+import Game.GoreAndAsh.Actor.Collection
+import Game.GoreAndAsh.Actor.Indexed
 import Game.GoreAndAsh.Logging 
 import Game.GoreAndAsh.Network
 import Game.GoreAndAsh.Sync.API
@@ -85,10 +96,14 @@ onEvent def e f = case e of
   Event a -> f a 
 
 -- | Server side collection of network actors that are automatically
--- synchronized to remote clients.
+-- synchronized to remote clients (creation and removing of actors).
 -- 
--- Second wire input is event with new actors to add to the collection
--- Third wire input is event with id of actor to delete from the collection
+-- * Second wire input is event with new actors to add to the collection
+--
+-- * Third wire input is event with id of actor to delete from the collection
+--
+-- Note: the collection doesn't do synchronization of actor internal state, you should
+-- call 'clientSync' by yourself.
 remoteActorCollectionServer :: forall m a b c c2 i . (MonadFix m, SyncMonad m, LoggingMonad m, ActorMonad m, NetworkMonad m, Eq i, RemoteActor i b, DynCollection c, FilterConstraint c (GameWireIndexed m i a b), FilterConstraint c (Either () (b, i)), F.Foldable c2, Functor c2) 
   => c (GameActor m i a b) -- ^ Initial set of actors
   -> GameActor m RemActorCollId (a, Event (c (GameActor m i a b)), Event (c2 i)) (c b)
@@ -139,22 +154,22 @@ remoteActorCollectionServer initialActors = do
       -> (a, Event (c (GameActor m i a b)), Event (c2 i))
       -> GameMonadT m (Either () (c b, c i), GameWire m (a, Event (c (GameActor m i a b)), Event (c2 i)) (c b, c i))
     go currentWires ds (a, addEvent, removeEvent) = do
-      -- | Adding new wires
+      -- Adding new wires
       newAddedWires <- onEvent currentWires addEvent $ \newActors -> do 
         addWires <- sequence newActors 
         sendSpawnMsgs $ toCounter . indexedId <$> addWires
         return $ currentWires `concatDynColl` addWires
 
-      -- | Removing wires
+      -- Removing wires
       newRemovedWires <- onEvent newAddedWires removeEvent $ \ids ->  do 
         sendDespawnMsgs $ toCounter <$> ids
         return $ F.foldl' (\acc i -> fFilter ((/= i) . indexedId) acc) newAddedWires ids
 
-      -- | Calculating outputs
+      -- Calculating outputs
       (bs, newWiresCntrls) <- liftM unzipDynColl $ mapM (\w -> stepWire w ds (Right a)) $ indexedWire <$> newRemovedWires
       let newWires = uncurry updateIndexedWire <$> (fmap const newWiresCntrls `zipDynColl` newRemovedWires)
 
-      -- | Attach ids
+      -- Attach ids
       let is = indexedId <$> newRemovedWires :: c i
       let bs' = (\(eb, i) -> (, i) <$> eb) <$> bs `zipDynColl` is :: c (Either () (b, i))
       let bs'' = unzipDynColl $ rightsDynColl bs' :: (c b, c i)
@@ -162,7 +177,10 @@ remoteActorCollectionServer initialActors = do
 
 
 -- | Client side collection of network actors that are automatically
--- synchronized to remote clients.
+-- synchronized to remote clients (creation and removing of actors).
+--
+-- Note: the collection doesn't do synchronization of actor internal state, you should
+-- call 'serverSync' by yourself.
 remoteActorCollectionClient :: forall m i a b . (SyncMonad m, LoggingMonad m, ActorMonad m, NetworkMonad m, Eq i, RemoteActor i b) 
   => RemActorCollId -- ^ Corresponding server collection id
   -> Peer -- ^ Server peer

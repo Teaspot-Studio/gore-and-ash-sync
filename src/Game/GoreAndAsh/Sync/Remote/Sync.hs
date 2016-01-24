@@ -1,5 +1,14 @@
+{-|
+Module      : Game.GoreAndAsh.Sync.Remote.Sync
+Description : EDSL for automatic synchronization
+Copyright   : (c) Anton Gushcha, 2015-2016
+License     : BSD3
+Maintainer  : ncrashed@gmail.com
+Stability   : experimental
+Portability : POSIX
+-}
 module Game.GoreAndAsh.Sync.Remote.Sync(
-  -- | Remote actor API
+  -- * Remote actor API
     Sync(..)
   , FullSync
   , RemoteActor(..)
@@ -8,10 +17,10 @@ module Game.GoreAndAsh.Sync.Remote.Sync(
   , serverSide
   , condSync
   , syncReject
-  -- | Helpers for conditional synchronization
+  -- * Helpers for conditional synchronization
   , fieldChanges
   , fieldChangesWithin
-  -- | Dictionary utils
+  -- * Dictionary utils
   , Dict(..)
   , encodish
   , decodish
@@ -45,23 +54,23 @@ decodish Dict = decode
 -- uses the description to generate special code to automatic
 -- synchronization of shared actor state.
 --
--- - Parameter @m@ means underlying game monad, that will be used during synchronization
+-- [@m@] means underlying game monad, that will be used during synchronization
 -- 
--- - Parameter @i@ means actor unique id type
+-- [@i@] means actor unique id type
 --
--- - Parameter @s@ means actor state that is beeing syncing. As soon as you crafted
---   @Sync i s s@ it means you defined full description how to sync actor state.
+-- [@s@] means actor state that is beeing syncing. As soon as you crafted
+--   'Sync i s s' it means you defined full description how to sync actor state.
 --
--- - Parameter @a@ is actual value type that the @Sync@ value is describing synchronization for.
---   As soon as you crafted @Sync i s s@ it means you defined full description how to sync actor state.
+-- [@a@] is actual value type that the 'Sync' value is describing synchronization for.
+--   As soon as you crafted 'Sync i s s' it means you defined full description how to sync actor state.
 data Sync m i s a where
-  SyncPure :: a -> Sync m i s a -- ^ Statically known value
-  SyncNone :: (s -> a) -> Sync m i s a -- ^ No synchronization, take local value
-  SyncClient :: Dict (Eq a, Serialize a, RemoteActor i s) -> Peer -> !Word64 -> (s -> a) -> Sync m i s a -- ^ The value is controlled by client and synched to server.
-  SyncServer :: Dict (Serialize a, RemoteActor i s) -> !Word64 -> (s -> a) -> Sync m i s a -- ^ The value is controlled by server and synched to clients.
-  SyncCond :: GameWire m s (Event ()) -> (s -> a) -> Sync m i s a -> Sync m i s a -- ^ Conditional synchronization
-  SyncReject :: Dict (Serialize a, RemoteActor i s) -> GameWire m (s, a) (Event a) -> !Word64 -> Sync m i s a -> Sync m i s a -- ^ Validate synchronized value, rollback if failed
-  SyncApp :: Sync m i s (a -> b) -> Sync m i s a -> Sync m i s b -- ^ Applicative application of actions
+  SyncPure :: a -> Sync m i s a -- Statically known value
+  SyncNone :: (s -> a) -> Sync m i s a -- No synchronization, take local value
+  SyncClient :: Dict (Eq a, Serialize a, RemoteActor i s) -> Peer -> !Word64 -> (s -> a) -> Sync m i s a -- The value is controlled by client and synched to server.
+  SyncServer :: Dict (Serialize a, RemoteActor i s) -> !Word64 -> (s -> a) -> Sync m i s a -- The value is controlled by server and synched to clients.
+  SyncCond :: GameWire m s (Event ()) -> (s -> a) -> Sync m i s a -> Sync m i s a -- Conditional synchronization
+  SyncReject :: Dict (Serialize a, RemoteActor i s) -> GameWire m (s, a) (Event a) -> !Word64 -> Sync m i s a -> Sync m i s a -- Validate synchronized value, rollback if failed
+  SyncApp :: Sync m i s (a -> b) -> Sync m i s a -> Sync m i s b -- Applicative application of actions
 
 instance Functor (Sync m i s) where
   fmap f s = case s of 
@@ -77,7 +86,9 @@ type FullSync m i s = Sync m i s s
 
 -- | API to support automatic synchronization of actors between client and server
 class NetworkMessage i => RemoteActor i a | i -> a, a -> i where
+  -- | State of remote actor (should be equal a)
   type RemoteActorState i :: *
+  -- | Id of remote actor (should be equal i)
   type RemoteActorId a :: *
 
 -- | Perphoms no synchronization, the sync primitive returns local value of field
@@ -88,6 +99,8 @@ noSync = SyncNone
 -- | Declares that state field is client side, i.e. it is produced in client actor
 -- and then sent to server. For peers that are not equal to specified (owner of the field)
 -- the sync behavior acts as @serverSide@.
+--
+-- If server side changes the value manually, client is forced to new server side value.
 clientSide :: (Eq a, Serialize a, RemoteActor i s)
   => Peer -- ^ Which peer controls the field, sync messages from other peers are not processed
   -> Word64 -- ^ Field id, other side actor should define @clientSide@ with matching id
@@ -97,13 +110,17 @@ clientSide peer !w getter = SyncClient Dict peer w getter
 
 -- | Declares that state field is server side, i.e. it is produced in server actor
 -- and then sent to all clients.
+--
+-- Clients cannot change the value manually.
 serverSide :: (Serialize a, RemoteActor i s)
   => Word64 -- ^ Field id, other side actor should define @serverSide@ with matching id
   -> (s -> a) -- ^ Field getter
   -> Sync m i s a
 serverSide !w getter = SyncServer Dict w getter
 
--- | Makes synchronization appear only when given wire produces an event
+-- | Makes synchronization appear only when given wire produces an event.
+--
+-- Note: intended to use with 'serverSide'
 condSync :: Monad m => GameWire m s (Event b) -- ^ Wire that produces events when sync should be done
   -> (s -> a) -- ^ Field getter
   -> Sync m i s a -- ^ Sub action that should be done when sync event is produced
@@ -132,6 +149,8 @@ fieldChangesWithin getter delta = mkSFN $ \s -> let a = getter s in a `seq` (Eve
 -- | There are sometimes net errors or malicios data change in remote actor,
 -- the action provides you ability to reject incorrect values and resync remote
 -- actor to fallback value.
+--
+-- Note: intended to use with 'serverSide'
 syncReject :: (Serialize a, RemoteActor i s)
   => GameWire m (s, a) (Event a) -- ^ Fires event when the synced value is invalid, event carries new value that should be placed and sended to remote peer
   -> Word64 -- ^ Id of field to resync at remote host when failed

@@ -1,17 +1,26 @@
 {-# OPTIONS_GHC -fno-warn-orphans #-}
+{-|
+Module      : Game.GoreAndAsh.Sync.Message
+Description : Arrow utilities for messaging
+Copyright   : (c) Anton Gushcha, 2015-2016
+License     : BSD3
+Maintainer  : ncrashed@gmail.com
+Stability   : experimental
+Portability : POSIX
+-}
 module Game.GoreAndAsh.Sync.Message(
     NetworkMessage(..)
-  -- | Getting messages
+  -- * Getting messages
   , peerIndexedMessages
   , peerProcessIndexed
   , peerProcessIndexedM
-  -- | Sending messages
+  -- * Sending messages
   , peerSendIndexedM
   , peerSendIndexed
   , peerSendIndexedDyn
   , peerSendIndexedMany
   , peerSendIndexedManyDyn
-  -- | Helpers
+  -- * Helpers
   , filterMsgs
   ) where
 

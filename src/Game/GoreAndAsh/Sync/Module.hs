@@ -1,4 +1,13 @@
 {-# OPTIONS_GHC -fno-warn-orphans #-}
+{-|
+Module      : Game.GoreAndAsh.Sync.Module
+Description : Monad transformer and game module instance
+Copyright   : (c) Anton Gushcha, 2015-2016
+License     : BSD3
+Maintainer  : ncrashed@gmail.com
+Stability   : experimental
+Portability : POSIX
+-}
 module Game.GoreAndAsh.Sync.Module(
     SyncT(..)
   , registerSyncIdInternal
@@ -27,6 +36,36 @@ import Game.GoreAndAsh.Logging
 import Game.GoreAndAsh.Network
 import Game.GoreAndAsh.Sync.State
 
+-- | Monad transformer of sync core module.
+--
+-- [@s@] - State of next core module in modules chain;
+--
+-- [@m@] - Next monad in modules monad stack;
+--
+-- [@a@] - Type of result value;
+--
+-- How to embed module:
+-- 
+-- @
+-- type AppStack = ModuleStack [LoggingT, NetworkT, ActorT, SyncT, ... other modules ... ] IO
+--
+-- -- | Current GHC (7.10.3) isn't able to derive this
+-- instance SyncMonad AppMonad where 
+--   getSyncIdM = AppMonad . getSyncIdM
+--   getSyncTypeRepM = AppMonad . getSyncTypeRepM
+--   registerSyncIdM = AppMonad . registerSyncIdM
+--   addSyncTypeRepM a b = AppMonad $ addSyncTypeRepM a b
+--   syncScheduleMessageM peer ch i mt msg  = AppMonad $ syncScheduleMessageM peer ch i mt msg
+--   syncSetLoggingM = AppMonad . syncSetLoggingM
+--   syncSetRoleM = AppMonad . syncSetRoleM
+--   syncGetRoleM = AppMonad syncGetRoleM
+--   syncRequestIdM a b = AppMonad $ syncRequestIdM a b 
+--
+-- newtype AppMonad a = AppMonad (AppStack a)
+--   deriving (Functor, Applicative, Monad, MonadFix, MonadIO, LoggingMonad, MonadThrow, MonadCatch, NetworkMonad, ActorMonad)
+-- @
+--
+-- The module is NOT pure within first phase (see 'ModuleStack' docs), therefore currently only 'IO' end monad can handler the module.
 newtype SyncT s m a = SyncT { runSyncT :: StateT (SyncState s) m a }
   deriving (Functor, Applicative, Monad, MonadState (SyncState s), MonadFix, MonadTrans, MonadIO, MonadThrow, MonadCatch, MonadMask)
 

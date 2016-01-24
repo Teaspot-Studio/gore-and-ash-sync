@@ -1,3 +1,12 @@
+{-|
+Module      : Game.GoreAndAsh.Sync.State
+Description : Internal state of core module and message typeclass
+Copyright   : (c) Anton Gushcha, 2015-2016
+License     : BSD3
+Maintainer  : ncrashed@gmail.com
+Stability   : experimental
+Portability : POSIX
+-}
 module Game.GoreAndAsh.Sync.State(
     SyncState(..)
   , SyncRole(..)
@@ -42,6 +51,9 @@ data SyncServiceMsg =
 
 instance Serialize SyncServiceMsg
 
+-- | Inner state of sync module
+--
+-- [@s@] - State of next module, the states are chained via nesting.
 data SyncState s = SyncState {
   -- | Next module in chain
   syncNextState :: !s
