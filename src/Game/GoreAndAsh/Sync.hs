@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -fno-warn-unused-imports #-}
 {-|
 Module      : Game.GoreAndAsh.Sync
 Description : Gore&Ash high-level networking core module
@@ -109,6 +110,12 @@ module Game.GoreAndAsh.Sync(
   , remoteActorCollectionServer
   , remoteActorCollectionClient
   ) where
+
+-- for docs
+import Game.GoreAndAsh
+import Game.GoreAndAsh.Actor 
+import Game.GoreAndAsh.Logging 
+import Game.GoreAndAsh.Network 
 
 import Game.GoreAndAsh.Sync.API as X
 import Game.GoreAndAsh.Sync.Message as X
