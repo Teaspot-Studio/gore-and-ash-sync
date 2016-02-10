@@ -22,6 +22,7 @@ import Control.Monad.Fix
 import Control.Monad.State.Strict
 import Data.Maybe
 import Data.Monoid 
+import Data.Proxy 
 import Data.Serialize
 import Data.Text (Text, pack)
 import Data.Word
@@ -83,7 +84,7 @@ instance (NetworkMonad m, LoggingMonad m, ActorMonad m, GameModule m s) => GameM
       return (a, s'')
 
   newModuleState = emptySyncState <$> newModuleState
-  withModule _ = id
+  withModule _ = withModule (Proxy :: Proxy m)
   cleanupModule _ = return ()
 
 -- | Detect service messages arrived to the machine and process them

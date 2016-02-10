@@ -1,0 +1,3 @@
+stack upload .
+sudo docker build -t gore-and-ash-sync .
+sudo docker run -it --rm gore-and-ash-sync
