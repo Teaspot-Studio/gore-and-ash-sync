@@ -13,4 +13,4 @@ ADD src /opt/project/src
 
 WORKDIR /opt/project
 
-ENTRYPOINT ["./mkdocs", "gore-and-ash-sync", "1.2.0.0", "NCrashed"]
+ENTRYPOINT ["./mkdocs", "gore-and-ash-sync", "1.2.0.1", "NCrashed"]
