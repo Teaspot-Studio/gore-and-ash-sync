@@ -12,11 +12,15 @@ module Game.GoreAndAsh.Sync.Options(
     SyncRole(..)
   , SyncOptions
   , syncOptionsRole
+  , syncOptionsChannel
+  , syncOptionsResolveDelay
   , syncOptionsNext
   , defaultSyncOptions
   ) where
 
 import Control.Lens (makeLenses)
+import Data.Time
+import Game.GoreAndAsh.Network (ChannelID)
 import GHC.Generics
 
 -- | Defines internal strategy of synchronization, whether the node is
@@ -29,9 +33,15 @@ data SyncRole =
 -- | Startup options of the sync module
 data SyncOptions s = SyncOptions {
   -- | Defines role of the node (use slave for clients, and master for servers)
-  _syncOptionsRole :: SyncRole
+  _syncOptionsRole            :: SyncRole
+  -- | Network channel to use for synchronization messages
+  --
+  -- Note: that option must be the same for all nodes.
+, _syncOptionsChannel         :: ChannelID
+  -- | Delays between messages for resolving a name of sync object
+, _syncOptionsResolveDelay    :: NominalDiffTime
   -- | Options of next underlying module
-, _syncOptionsNext :: s
+, _syncOptionsNext            :: s
 } deriving (Generic, Show)
 
 makeLenses ''SyncOptions
@@ -41,11 +51,15 @@ makeLenses ''SyncOptions
 -- @
 -- SyncOptions {
 --   _syncOptionsRole = SyncSlave
+-- , _syncOptionsChannel = fromIntegral 1
+-- , _syncOptionsResolveDelay = realToFrac (5 :: Double)
 -- , _syncOptionsNext = s
 -- }
 -- @
 defaultSyncOptions :: s -> SyncOptions s
 defaultSyncOptions s = SyncOptions {
     _syncOptionsRole = SyncSlave
+  , _syncOptionsChannel = fromIntegral (1 :: Int)
+  , _syncOptionsResolveDelay = realToFrac (5 :: Double)
   , _syncOptionsNext = s
   }

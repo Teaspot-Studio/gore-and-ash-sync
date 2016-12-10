@@ -13,7 +13,7 @@ import System.Environment
 import Text.Read
 
 -- | Application monad that is used for implementation of game API
-type AppMonad = TimerT Spider (SyncT Spider (NetworkT Spider (LoggingT Spider(GameMonad Spider))))
+type AppMonad = SyncT Spider (TimerT Spider (NetworkT Spider (LoggingT Spider(GameMonad Spider))))
 
 -- Server application.
 -- The application should be generic in the host monad that is used

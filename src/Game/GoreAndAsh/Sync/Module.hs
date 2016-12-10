@@ -20,19 +20,28 @@ import Control.Monad.Trans.Control
 import Control.Monad.Trans.Resource
 import Data.Proxy
 import Game.GoreAndAsh
+import Game.GoreAndAsh.Logging
+import Game.GoreAndAsh.Network
 import Game.GoreAndAsh.Sync.API
---import Game.GoreAndAsh.Sync.Error
+import Game.GoreAndAsh.Sync.Message
 import Game.GoreAndAsh.Sync.Options
+import Game.GoreAndAsh.Time
+
+import qualified Data.HashMap.Strict as H
 
 -- | Internal state of core module
 data SyncEnv t = SyncEnv {
-  syncOptions :: SyncOptions ()
+  syncEnvOptions :: SyncOptions ()
+, syncEnvNames :: ExternalRef t (NameMap, SyncId)
 }
 
 -- | Creation of intial sync state
 newSyncEnv :: MonadAppHost t m => SyncOptions s -> m (SyncEnv t)
-newSyncEnv opts = return SyncEnv {
-    syncOptions = opts & syncOptionsNext .~ ()
+newSyncEnv opts = do
+  namesRef <- newExternalRef (mempty, 1)
+  return SyncEnv {
+    syncEnvOptions = opts & syncOptionsNext .~ ()
+  , syncEnvNames = namesRef
   }
 
 -- | Monad transformer of synchronization core module.
@@ -46,8 +55,8 @@ newSyncEnv opts = return SyncEnv {
 -- How to embed module:
 --
 -- @
--- newtype AppMonad t a = AppMonad (SyncT t (Network t (LoggingT (GameMonad t))) a)
---   deriving (Functor, Applicative, Monad, MonadFix, MonadIO, LoggingMonad, NetworkMonad)
+-- newtype AppMonad t a = AppMonad (SyncT t (TimerT t (NetworkT t (LoggingT t (GameMonad t))))) a)
+--   deriving (Functor, Applicative, Monad, MonadFix, MonadIO, LoggingMonad, NetworkMonad, TimerMonad, SyncMonad)
 -- @
 newtype SyncT t m a = SyncT { runSyncT :: ReaderT (SyncEnv t) m a }
   deriving (Functor, Applicative, Monad, MonadReader (SyncEnv t), MonadFix
@@ -55,10 +64,6 @@ newtype SyncT t m a = SyncT { runSyncT :: ReaderT (SyncEnv t) m a }
 
 instance MonadTrans (SyncT t) where
   lift = SyncT . lift
-
--- instance MonadCatch m => MonadError SyncError (SyncT t m) where
---   throwError = throwM
---   catchError = catch
 
 instance MonadReflexCreateTrigger t m => MonadReflexCreateTrigger t (SyncT t m) where
   newEventWithTrigger = lift . newEventWithTrigger
@@ -91,16 +96,38 @@ instance (MonadBaseControl b m) => MonadBaseControl b (SyncT t m) where
 instance MonadResource m => MonadResource (SyncT t m) where
   liftResourceT = SyncT . liftResourceT
 
-instance (MonadIO (HostFrame t), GameModule t m) => GameModule t (SyncT t m) where
+instance (MonadIO (HostFrame t), NetworkMonad t m, LoggingMonad t m, TimerMonad t m, GameModule t m) => GameModule t (SyncT t m) where
   type ModuleOptions t (SyncT t m) = SyncOptions (ModuleOptions t m)
 
   runModule opts m = do
     s <- newSyncEnv opts
-    a <- runModule (opts ^. syncOptionsNext) (runReaderT (runSyncT m) s)
+    a <- runModule (opts ^. syncOptionsNext) (runReaderT (runSyncT m') s)
     return a
+    where
+      m' = syncService >> m
 
   withModule t _ = withModule t (Proxy :: Proxy m)
 
-instance MonadAppHost t m => SyncMonad t (SyncT t m) where
-  noop = return ()
-  {-# INLINE noop #-}
+instance (MonadAppHost t m, TimerMonad t m, LoggingMonad t m) => SyncMonad t (SyncT t m) where
+  syncOptions = asks syncEnvOptions
+  {-# INLINE syncOptions #-}
+  syncKnownNames = do
+    dynVar <- externalRefDynamic =<< asks syncEnvNames
+    return $ fst <$> dynVar
+  {-# INLINE syncKnownNames #-}
+  syncUnsafeRegId name = do
+    namesRef <- asks syncEnvNames
+    modifyExternalRef namesRef $ \(names, i) -> let
+      names' = H.insert name i names
+      i' = i + 1
+      state' = names' `seq` i' `seq` (names', i')
+      in (state', i)
+  {-# INLINE syncUnsafeRegId #-}
+  syncUnsafeAddId name i = do
+    namesRef <- asks syncEnvNames
+    modifyExternalRef namesRef $ \(names, localI) -> let
+      names' = H.insert name i names
+      i' = i `max` localI
+      state' = names' `seq` i' `seq` (names', i')
+      in (state', ())
+  {-# INLINE syncUnsafeAddId #-}
