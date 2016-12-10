@@ -19,5 +19,17 @@ to default channel if there is only one channel allocated in network module. Che
 of network module, client and server allocated channels count must match.
 -}
 module Game.GoreAndAsh.Sync(
-
+    SyncT
+  -- * Options
+  , SyncRole(..)
+  , SyncOptions
+  , syncOptionsRole
+  , syncOptionsNext
+  , defaultSyncOptions
+  -- * API
+  , SyncMonad(..)
   ) where
+
+import Game.GoreAndAsh.Sync.API as X
+import Game.GoreAndAsh.Sync.Module as X
+import Game.GoreAndAsh.Sync.Options as X
