@@ -32,17 +32,17 @@ type SyncName = String
 type SyncId = Word32
 
 -- | Defines main message protocol
-data SyncMessage a =
+data SyncMessage =
   -- | Utility messages
     SyncServiceMessage !SyncServiceMessage
   -- | Payloads of synchronizations
   | SyncPayloadMessage {
       syncId      :: !SyncId
-    , syncPayload :: !a
+    , syncPayload :: !ByteString
     }
   deriving (Generic)
 
-instance Store a => Store (SyncMessage a)
+instance Store SyncMessage
 
 -- | Defines service messages
 data SyncServiceMessage =
@@ -55,16 +55,13 @@ data SyncServiceMessage =
 instance Store SyncServiceMessage
 
 -- | Convert synch message into message of underlying network module
-encodeSyncMessage :: Store a => MessageType -> SyncMessage a -> Message
-encodeSyncMessage mt sm = Message mt (encode sm)
+encodeSyncMessage :: Store a => MessageType -> SyncId -> a -> Message
+encodeSyncMessage mt i a = Message mt (encode $ SyncPayloadMessage i $ encode a)
 
 -- | Helper for encoding service messages
 encodeSyncServiceMsg :: MessageType -> SyncServiceMessage -> Message
-encodeSyncServiceMsg mt smsg = Message mt (encode msg)
-  where
-    msg :: SyncMessage ()
-    msg = SyncServiceMessage smsg
+encodeSyncServiceMsg mt smsg = Message mt (encode $ SyncServiceMessage smsg)
 
 -- | Convert received payload to sync message
-decodeSyncMessage :: Store a => ByteString -> Either PeekException (SyncMessage a)
+decodeSyncMessage :: ByteString -> Either PeekException SyncMessage
 decodeSyncMessage = decode

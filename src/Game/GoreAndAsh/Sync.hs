@@ -27,7 +27,10 @@ module Game.GoreAndAsh.Sync(
   , syncOptionsNext
   , defaultSyncOptions
   -- * API
+  , SyncName
   , SyncMonad(..)
+  , syncToClients
+  , syncFromServer
   ) where
 
 import Game.GoreAndAsh.Sync.API as X

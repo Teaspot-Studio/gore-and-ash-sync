@@ -104,7 +104,10 @@ instance (MonadIO (HostFrame t), NetworkMonad t m, LoggingMonad t m, TimerMonad 
     a <- runModule (opts ^. syncOptionsNext) (runReaderT (runSyncT m') s)
     return a
     where
-      m' = syncService >> m
+      m' = do
+        a <- m
+        syncService
+        return a
 
   withModule t _ = withModule t (Proxy :: Proxy m)
 

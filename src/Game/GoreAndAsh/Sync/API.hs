@@ -82,11 +82,9 @@ syncToClients name mt da = do
   dynSended <- processPeers $ \peer -> do
     buildE <- getPostBuild
     let updatedE = leftmost [updated da, tagPromptlyDyn da buildE]
-        msgE = fmap (mkMessage i) updatedE
+        msgE = fmap (encodeSyncMessage mt i) updatedE
     peerChanSend peer chan msgE
   pure . switchPromptlyDyn $ fmap (fmap M.keys . mergeMap) dynSended
-  where
-    mkMessage i a = encodeSyncMessage mt $ SyncPayloadMessage i a
 
 -- | Receive stream of values from remote server.
 syncFromServer :: (SyncMonad t m, NetworkClient t m, Store a)
@@ -98,31 +96,56 @@ syncFromServer name initVal = do
   fmap join $ whenConnected pureInitVal $ \peer -> do -- first wait until connected
     fmap join $ resolveSyncName name pureInitVal $ \i -> do -- wait for id
       msgE <- syncPeerMessage peer
-      let neededMsgE = fforMaybe msgE $ \case
-            SyncPayloadMessage{..} -> if i == syncId
-              then Just syncPayload
-              else Nothing
-            _ -> Nothing
+      let neededMsgE = fforMaybe msgE $ \(i', a) -> if i == i'
+            then Just a
+            else Nothing
       holdDyn initVal neededMsgE -- here collect updates in dynamic
 
--- | Helper, fires when a synchronization message arrived
+-- | Helper that fires when a synchronization message arrives
 syncMessage :: (SyncMonad t m, NetworkMonad t m, Store a)
-  => m (Event t (Peer, SyncMessage a))
+  => m (Event t (Peer, SyncId, a))
 syncMessage = do
   opts <- syncOptions
   let chan = opts ^. syncOptionsChannel
   msgE <- chanMessage chan
-  logEitherWarn $ ffor msgE $ \(peer, bs) -> case decodeSyncMessage bs of
-    Left er -> Left $ showl er
-    Right a -> Right (peer, a)
+  logEitherWarn $ fforMaybe msgE $ \(peer, bs) -> moveEither $ do
+    msg <- decodeSyncMessage bs
+    case msg of
+      SyncPayloadMessage i bs' -> do
+        msg' <- decode bs'
+        return $ Just (peer, i, msg')
+      _ -> return Nothing
+  where
+    moveEither :: Either PeekException (Maybe a) -> Maybe (Either LogStr a)
+    moveEither e = case e of
+      Left er -> Just . Left $ showl er
+      Right ma -> Right <$> ma
+
+-- | Helper, fires when a synchronization message arrived
+syncServiceMessage :: (SyncMonad t m, NetworkMonad t m)
+  => m (Event t (Peer, SyncServiceMessage))
+syncServiceMessage = do
+  opts <- syncOptions
+  let chan = opts ^. syncOptionsChannel
+  msgE <- chanMessage chan
+  logEitherWarn $ fforMaybe msgE $ \(peer, bs) -> moveEither $ do
+    msg <- decodeSyncMessage bs
+    case msg of
+      SyncServiceMessage smsg -> return $ Just (peer, smsg)
+      _ -> return Nothing
+  where
+    moveEither :: Either PeekException (Maybe a) -> Maybe (Either LogStr a)
+    moveEither e = case e of
+      Left er -> Just . Left $ showl er
+      Right ma -> Right <$> ma
 
 -- | Helper, fires when a synchronization message arrived
 syncPeerMessage :: (SyncMonad t m, NetworkMonad t m, Store a)
-  => Peer -> m (Event t (SyncMessage a))
+  => Peer -> m (Event t (SyncId, a))
 syncPeerMessage peer = do
   msgE <- syncMessage
-  return $ fforMaybe msgE $ \(peer', msg) -> if peer == peer'
-    then Just msg
+  return $ fforMaybe msgE $ \(peer', i, msg) -> if peer == peer'
+    then Just (i, msg)
     else Nothing
 
 -- | Helper that finds id for name or create new id for the name.
@@ -195,12 +218,12 @@ syncService = do
   let chan = opts ^. syncOptionsChannel
       role = opts ^. syncOptionsRole
   -- Filter messages
-  msgE <- syncMessage :: m (Event t (Peer, SyncMessage ()))
+  msgE <- syncServiceMessage
   let reqE = fforMaybe msgE $ \(peer, msg) -> case msg of
-        SyncServiceMessage (ServiceAskId name) -> Just (peer, name)
+        ServiceAskId name -> Just (peer, name)
         _ -> Nothing
       respE = fforMaybe msgE $ \(_, msg) -> case msg of
-        SyncServiceMessage (ServiceTellId i name) -> Just (name, i)
+        ServiceTellId i name -> Just (name, i)
         _ -> Nothing
   -- Responses to request
   namesDyn <- syncKnownNames

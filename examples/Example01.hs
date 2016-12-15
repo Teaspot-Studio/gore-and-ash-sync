@@ -17,7 +17,8 @@ type AppMonad = SyncT Spider (TimerT Spider (NetworkT Spider (LoggingT Spider(Ga
 
 -- Server application.
 -- The application should be generic in the host monad that is used
-appServer :: (LoggingMonad t m, NetworkServer t m) => PortNumber -> m ()
+appServer :: forall t m . (LoggingMonad t m, NetworkServer t m, SyncMonad t m)
+  => PortNumber -> m ()
 appServer p = do
   e <- getPostBuild
   loggingSetDebugFlag True
@@ -36,14 +37,18 @@ appServer p = do
   discE <- peerDisconnected
   logInfoE $ ffor discE $ const $ "Peer is disconnected..."
 
-  _ <- processPeers peerWidget
+  counterDyn <- makeSharedCounter
+  logInfoE $ ffor (updated counterDyn) $ \n -> "Counter state: " <> showl n
   return ()
   where
-  peerWidget peer = do
-    let chan = mempty
-    msgE <- peerChanMessage peer chan
-    logInfoE $ ffor msgE $ \msg -> "Peer send a message: " <> showl msg
-    peerChanSend peer chan (Message ReliableMessage <$> msgE)
+  makeSharedCounter :: m (Dynamic t Int)
+  makeSharedCounter = do
+    ref <- newExternalRef (0 :: Int)
+    tickE <- tickEvery (realToFrac (1 :: Double))
+    performEvent_ $ ffor tickE $ const $ modifyExternalRef ref $ \n -> (n+1, ())
+    dynCnt <- externalRefDynamic ref
+    _ <- syncToClients "counter" UnreliableMessage dynCnt
+    return dynCnt
 
 -- | Find server address by host name or IP
 resolveServer :: MonadIO m => HostName -> ServiceName -> m SockAddr
@@ -53,9 +58,15 @@ resolveServer host serv = do
     [] -> fail $ "Cannot resolve server address: " <> host
     (a : _) -> return $ addrAddress a
 
+-- | Client side logic of application
+clientLogic :: (LoggingMonad t m, SyncMonad t m, NetworkClient t m) => m ()
+clientLogic = do
+  dynCnt :: Dynamic t Int <- syncFromServer "counter" 0
+  logInfoE $ ffor (updated dynCnt) $ \n -> "Counter state: " <> showl n
+
 -- Client application.
 -- The application should be generic in the host monad that is used
-appClient :: (LoggingMonad t m, TimerMonad t m, NetworkClient t m) => HostName -> ServiceName -> m ()
+appClient :: (LoggingMonad t m, SyncMonad t m, NetworkClient t m) => HostName -> ServiceName -> m ()
 appClient host serv = do
   addr <- resolveServer host serv
   e <- getPostBuild
@@ -66,14 +77,7 @@ appClient host serv = do
     , clientOutcoming = 0
     })
   logInfoE $ ffor connectedE $ const "Connected to server!"
-  _ <- whenConnected (pure ()) $ \server -> do
-    buildE <- getPostBuild
-    tickE <- tickEvery (realToFrac (1 :: Double))
-    let sendE = leftmost [tickE, buildE]
-    _ <- peerChanSend server mempty $ ffor sendE $ const $ Message ReliableMessage "Hello, server!"
-    respondE <- peerChanMessage server mempty
-    logInfoE $ ffor respondE $ \msg -> "Server respond: " <> showl msg
-  return ()
+  clientLogic
 
 data Mode = Client HostName ServiceName | Server PortNumber
 
