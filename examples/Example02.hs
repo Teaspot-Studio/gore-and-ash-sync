@@ -19,6 +19,10 @@ type AppMonad = SyncT Spider (TimerT Spider (NetworkT Spider (LoggingT Spider(Ga
 counterId :: SyncItemId
 counterId = 0
 
+-- | Number of dynamic counters that is created both on client and server
+countersCount :: Int
+countersCount = 5
+
 -- Server application.
 -- The application should be generic in the host monad that is used
 appServer :: forall t m . (LoggingMonad t m, NetworkServer t m, SyncMonad t m)
@@ -41,14 +45,18 @@ appServer p = do
   discE <- peerDisconnected
   logInfoE $ ffor discE $ const $ "Peer is disconnected..."
 
-  counterDyn <- makeSharedCounter
-  logInfoE $ ffor (updated counterDyn) $ \n -> "Counter state: " <> showl n
+  counterDyns <- makeSharedCounters countersCount
+  let countersDyn = sequence counterDyns
+  logInfoE $ ffor (updated countersDyn) $ \ns -> "Counters state: " <> showl ns
   return ()
   where
-  makeSharedCounter :: m (Dynamic t Int)
-  makeSharedCounter = do
+  makeSharedCounters :: Int -> m [Dynamic t Int]
+  makeSharedCounters n = mapM makeSharedCounter [0 .. n-1]
+
+  makeSharedCounter :: Int -> m (Dynamic t Int)
+  makeSharedCounter i = syncWithName ("counter" <> show i) $ do
     ref <- newExternalRef (0 :: Int)
-    tickE <- tickEvery (realToFrac (1 :: Double))
+    tickE <- tickEvery (fromIntegral $ i + 1)
     performEvent_ $ ffor tickE $ const $ modifyExternalRef ref $ \n -> (n+1, ())
     dynCnt <- externalRefDynamic ref
     _ <- syncToClients counterId UnreliableMessage dynCnt
@@ -63,10 +71,17 @@ resolveServer host serv = do
     (a : _) -> return $ addrAddress a
 
 -- | Client side logic of application
-clientLogic :: (LoggingMonad t m, SyncMonad t m, NetworkClient t m) => m ()
+clientLogic :: forall t m . (LoggingMonad t m, SyncMonad t m, NetworkClient t m) => m ()
 clientLogic = do
-  dynCnt :: Dynamic t Int <- syncFromServer counterId 0
-  logInfoE $ ffor (updated dynCnt) $ \n -> "Counter state: " <> showl n
+  counterDyns <- makeSharedCounters countersCount
+  let countersDyn = sequence counterDyns
+  logInfoE $ ffor (updated countersDyn) $ \ns -> "Counters state: " <> showl ns
+  where
+  makeSharedCounters :: Int -> m [Dynamic t Int]
+  makeSharedCounters n = mapM makeSharedCounter [0 .. n-1]
+
+  makeSharedCounter :: Int -> m (Dynamic t Int)
+  makeSharedCounter i = syncWithName ("counter" <> show i) $ syncFromServer counterId 0
 
 -- Client application.
 -- The application should be generic in the host monad that is used
