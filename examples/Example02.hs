@@ -120,5 +120,7 @@ main = do
       opts = case mode of
         Client _ _ -> defaultSyncOptions netopts & syncOptionsRole .~ SyncSlave
         Server _ -> defaultSyncOptions netopts & syncOptionsRole .~ SyncMaster
-      netopts = (defaultNetworkOptions ()) { networkDetailedLogging = False }
+      netopts = (defaultNetworkOptions ()) {
+          networkDetailedLogging = False
+        }
   runSpiderHost $ hostApp $ runModule opts (app :: AppMonad ())
