@@ -9,6 +9,7 @@ Portability : POSIX
 -}
 module Game.GoreAndAsh.Sync.Message(
     SyncName
+  , SyncItemId
   , SyncId
   , SyncMessage(..)
   , SyncServiceMessage(..)
@@ -25,7 +26,18 @@ import Data.ByteString (ByteString)
 
 -- | Defines unique name of synchronization object so nodes
 -- are able to find which value need an update on other side.
+--
+-- The name is used to define dynamically resolved scope for
+-- values.
 type SyncName = String
+
+-- | Defines unique name withing a current 'SyncName' object scope.
+-- That is statically known number that binds a value between clients and
+-- server within single sync object.
+--
+-- Note that unlike the 'SyncName' the id is used to define
+-- statially resolved value.
+type SyncItemId = Word32
 
 -- | Identifier that bijectively maps to 'SyncName'. That helps to avoid
 -- overhead of sending full names over network.
@@ -37,8 +49,9 @@ data SyncMessage =
     SyncServiceMessage !SyncServiceMessage
   -- | Payloads of synchronizations
   | SyncPayloadMessage {
-      syncId      :: !SyncId
-    , syncPayload :: !ByteString
+      syncId      :: !SyncId     -- ^ Scope id
+    , syncItemId  :: !SyncItemId -- ^ Specific value id
+    , syncPayload :: !ByteString -- ^ Payload with updated value
     }
   deriving (Generic)
 
@@ -55,8 +68,8 @@ data SyncServiceMessage =
 instance Store SyncServiceMessage
 
 -- | Convert synch message into message of underlying network module
-encodeSyncMessage :: Store a => MessageType -> SyncId -> a -> Message
-encodeSyncMessage mt i a = Message mt (encode $ SyncPayloadMessage i $ encode a)
+encodeSyncMessage :: Store a => MessageType -> SyncId -> SyncItemId -> a -> Message
+encodeSyncMessage mt i ii a = Message mt (encode $ SyncPayloadMessage i ii $ encode a)
 
 -- | Helper for encoding service messages
 encodeSyncServiceMsg :: MessageType -> SyncServiceMessage -> Message

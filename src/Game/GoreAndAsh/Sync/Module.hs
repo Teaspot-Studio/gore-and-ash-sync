@@ -9,6 +9,7 @@ Portability : POSIX
 -}
 module Game.GoreAndAsh.Sync.Module(
     SyncT
+  , globalSyncName
   ) where
 
 import Control.Lens ((&), (.~), (^.))
@@ -18,6 +19,8 @@ import Control.Monad.Except
 import Control.Monad.Reader
 import Control.Monad.Trans.Control
 import Control.Monad.Trans.Resource
+import Data.IORef
+import Data.Monoid
 import Data.Proxy
 import Game.GoreAndAsh
 import Game.GoreAndAsh.Logging
@@ -29,19 +32,32 @@ import Game.GoreAndAsh.Time
 
 import qualified Data.HashMap.Strict as H
 
+-- | Name of global scope for synchronisation that is created
+-- by default.
+--
+-- You should never redefine this scope!
+globalSyncName :: SyncName
+globalSyncName = ""
+
 -- | Internal state of core module
 data SyncEnv t = SyncEnv {
+  -- | Module options
   syncEnvOptions :: SyncOptions ()
+  -- | Storage of name map and next free id
 , syncEnvNames :: ExternalRef t (NameMap, SyncId)
+  -- | Current sync object
+, syncEnvName :: IORef SyncName
 }
 
 -- | Creation of intial sync state
 newSyncEnv :: MonadAppHost t m => SyncOptions s -> m (SyncEnv t)
 newSyncEnv opts = do
-  namesRef <- newExternalRef (mempty, 1)
+  namesRef <- newExternalRef (H.singleton globalSyncName 0, 1)
+  nameRef <- liftIO $ newIORef globalSyncName
   return SyncEnv {
     syncEnvOptions = opts & syncOptionsNext .~ ()
   , syncEnvNames = namesRef
+  , syncEnvName = nameRef
   }
 
 -- | Monad transformer of synchronization core module.
@@ -96,7 +112,7 @@ instance (MonadBaseControl b m) => MonadBaseControl b (SyncT t m) where
 instance MonadResource m => MonadResource (SyncT t m) where
   liftResourceT = SyncT . liftResourceT
 
-instance (MonadIO (HostFrame t), NetworkMonad t m, LoggingMonad t m, TimerMonad t m, GameModule t m) => GameModule t (SyncT t m) where
+instance (MonadIO (HostFrame t), NetworkMonad t m, LoggingMonad t m, TimerMonad t m, GameModule t m, MonadMask m) => GameModule t (SyncT t m) where
   type ModuleOptions t (SyncT t m) = SyncOptions (ModuleOptions t m)
 
   runModule opts m = do
@@ -111,13 +127,21 @@ instance (MonadIO (HostFrame t), NetworkMonad t m, LoggingMonad t m, TimerMonad 
 
   withModule t _ = withModule t (Proxy :: Proxy m)
 
-instance (MonadAppHost t m, TimerMonad t m, LoggingMonad t m) => SyncMonad t (SyncT t m) where
+instance (MonadAppHost t m, MonadMask m, TimerMonad t m, LoggingMonad t m) => SyncMonad t (SyncT t m) where
   syncOptions = asks syncEnvOptions
   {-# INLINE syncOptions #-}
   syncKnownNames = do
     dynVar <- externalRefDynamic =<< asks syncEnvNames
     return $ fst <$> dynVar
   {-# INLINE syncKnownNames #-}
+  syncCurrentName = do
+    ref <- asks syncEnvName
+    liftIO $ readIORef ref
+  {-# INLINE syncCurrentName #-}
+  syncUnsafeSetName name = do
+    ref <- asks syncEnvName
+    liftIO . atomicModifyIORef' ref $ \oldName -> (oldName <> name, ())
+  {-# INLINE syncUnsafeSetName #-}
   syncUnsafeRegId name = do
     namesRef <- asks syncEnvNames
     modifyExternalRef namesRef $ \(names, i) -> let

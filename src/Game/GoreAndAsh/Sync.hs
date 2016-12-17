@@ -28,7 +28,9 @@ module Game.GoreAndAsh.Sync(
   , defaultSyncOptions
   -- * API
   , SyncName
+  , SyncItemId
   , SyncMonad(..)
+  , syncWithName
   , syncToClients
   , syncFromServer
   ) where

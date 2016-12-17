@@ -10,8 +10,11 @@ Portability : POSIX
 {-# LANGUAGE LambdaCase #-}
 module Game.GoreAndAsh.Sync.API(
     SyncName
+  , SyncItemId
   , SyncMonad(..)
+  , syncWithName
   , syncToClients
+  , syncToClientsUniq
   , syncFromServer
   -- * Internal
   , NameMap
@@ -20,6 +23,7 @@ module Game.GoreAndAsh.Sync.API(
 
 import Control.Lens ((^.))
 import Control.Monad
+import Control.Monad.Catch
 import Control.Monad.Trans
 import Data.Monoid
 import Data.Store
@@ -36,12 +40,20 @@ import qualified Data.Map.Strict as M
 -- | Bijection between name and id of synchronized object
 type NameMap = H.HashMap SyncName SyncId
 
-class (MonadAppHost t m, TimerMonad t m, LoggingMonad t m)
+class (MonadAppHost t m, TimerMonad t m, LoggingMonad t m, MonadMask m)
   => SyncMonad t m | m -> t where
     -- | Get settings of the module
     syncOptions :: m (SyncOptions ())
     -- | Get map of known names on the node
     syncKnownNames :: m (Dynamic t NameMap)
+    -- | Return current scope sync object of synchronization object
+    syncCurrentName :: m SyncName
+    -- | Set current scope sync object. Unsafe as change of scope name have to
+    -- occur only at a scope border. See 'syncWithName'.
+    --
+    -- Need this as cannot implement automatic lifting with 'syncWithName' as
+    -- primitive operation.
+    syncUnsafeSetName :: SyncName -> m ()
     -- | Register new id for given name (overwrites existing ids).
     --
     -- Used by server to generate id for name.
@@ -51,12 +63,25 @@ class (MonadAppHost t m, TimerMonad t m, LoggingMonad t m)
     -- Used by client to register id requested from server.
     syncUnsafeAddId :: SyncName -> SyncId -> m ()
 
-instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), MonadTrans mt, SyncMonad t m, TimerMonad t m, LoggingMonad t m)
+-- | Execute nested action with given scope name and restore it after
+syncWithName :: SyncMonad t m => SyncName -> m a -> m a
+syncWithName name = bracket setName syncUnsafeSetName . const
+  where
+  setName = do
+    oldName <- syncCurrentName
+    syncUnsafeSetName name
+    return oldName
+
+instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), MonadMask (mt m), MonadTrans mt, SyncMonad t m, TimerMonad t m, LoggingMonad t m)
   => SyncMonad t (mt m) where
     syncOptions = lift syncOptions
     {-# INLINE syncOptions #-}
     syncKnownNames = lift syncKnownNames
     {-# INLINE syncKnownNames #-}
+    syncCurrentName = lift syncCurrentName
+    {-# INLINE syncCurrentName #-}
+    syncUnsafeSetName = lift . syncUnsafeSetName
+    {-# INLINE syncUnsafeSetName #-}
     syncUnsafeRegId = lift . syncUnsafeRegId
     {-# INLINE syncUnsafeRegId #-}
     syncUnsafeAddId a b = lift $ syncUnsafeAddId a b
@@ -64,46 +89,77 @@ instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), MonadTrans mt, SyncMonad t
 
 -- TODO: Idea to make named dynamic NDynamic t a = (SyncName, Dynamic t a)
 
--- | Start streaming given dynamic value to all connected clients
+-- | Start streaming given dynamic value to all connected clients.
+--
+-- Intended to be called on server side and a corresponding 'syncFromServer'
+-- call is needed on client side.
 syncToClients :: (SyncMonad t m, NetworkServer t m, Store a)
-  -- | Unique name of synchronization object
-  => SyncName
+  -- | Unique name of synchronization value withing current scope
+  => SyncItemId
   -- | Underlying message type for sending, you can set unrelable delivery if
   -- the data rapidly changes.
   -> MessageType
-  -- | Source of data to transfer to clients
+  -- | Source of data to transfer to clients. Note that updated to clients
+  -- are performed each time the dynamic fires event the current value of
+  -- internal behavior isn't changed. See also: 'syncToClientsUniq'.
   -> Dynamic t a
   -- | Returns event that fires when a value was synced to given peers
   -> m (Event t [Peer])
-syncToClients name mt da = do
+syncToClients itemId mt da = do
   opts <- syncOptions
   let chan = opts ^. syncOptionsChannel
-  i <- makeSyncName name
+  i <- makeSyncName =<< syncCurrentName
   dynSended <- processPeers $ \peer -> do
     buildE <- getPostBuild
     let updatedE = leftmost [updated da, tagPromptlyDyn da buildE]
-        msgE = fmap (encodeSyncMessage mt i) updatedE
+        msgE = fmap (encodeSyncMessage mt i itemId) updatedE
     peerChanSend peer chan msgE
   pure . switchPromptlyDyn $ fmap (fmap M.keys . mergeMap) dynSended
 
+-- | Start streaming given dynamic value to all connected clients only if given
+-- dynamic is acturally changed.
+--
+-- Intended to be called on server side and a corresponding 'syncFromServer'
+-- call is needed on client side.
+syncToClientsUniq :: (SyncMonad t m, NetworkServer t m, Store a, Eq a)
+  -- | Unique name of synchronization value withing current scope
+  => SyncItemId
+  -- | Underlying message type for sending, you can set unrelable delivery if
+  -- the data rapidly changes.
+  -> MessageType
+  -- | Source of data to transfer to clients. Note that updated to clients
+  -- are performed only when new value of the dynamic is actually different
+  -- from previous one.
+  -> UniqDynamic t a
+  -- | Returns event that fires when a value was synced to given peers
+  -> m (Event t [Peer])
+syncToClientsUniq itemId mt = syncToClients itemId mt . fromUniqDynamic
+
 -- | Receive stream of values from remote server.
+--
+-- Matches to call of 'syncToClients', should be called on client side.
 syncFromServer :: (SyncMonad t m, NetworkClient t m, Store a)
-  => SyncName -- ^ Unique name of synchronization object
+  => SyncItemId -- ^ Unique name of synchronization value withing current scope
   -> a -- ^ Initial value
   -> m (Dynamic t a)
-syncFromServer name initVal = do
+syncFromServer itemId initVal = do
+  name <- syncCurrentName
   let pureInitVal = return $ pure initVal
   fmap join $ whenConnected pureInitVal $ \peer -> do -- first wait until connected
     fmap join $ resolveSyncName name pureInitVal $ \i -> do -- wait for id
       msgE <- syncPeerMessage peer
-      let neededMsgE = fforMaybe msgE $ \(i', a) -> if i == i'
+      let neededMsgE = fforMaybe msgE $ \(i', itemId', a) -> if i == i' && itemId == itemId'
             then Just a
             else Nothing
       holdDyn initVal neededMsgE -- here collect updates in dynamic
 
+-- syncToServer :: (SyncMonad t m, NetworkClient t m, Store a)
+--   => SyncName -- ^ Unique name of synchronization object
+--   ->
+
 -- | Helper that fires when a synchronization message arrives
 syncMessage :: (SyncMonad t m, NetworkMonad t m, Store a)
-  => m (Event t (Peer, SyncId, a))
+  => m (Event t (Peer, SyncId, SyncItemId, a))
 syncMessage = do
   opts <- syncOptions
   let chan = opts ^. syncOptionsChannel
@@ -111,9 +167,9 @@ syncMessage = do
   logEitherWarn $ fforMaybe msgE $ \(peer, bs) -> moveEither $ do
     msg <- decodeSyncMessage bs
     case msg of
-      SyncPayloadMessage i bs' -> do
+      SyncPayloadMessage i itemId bs' -> do
         msg' <- decode bs'
-        return $ Just (peer, i, msg')
+        return $ Just (peer, i, itemId, msg')
       _ -> return Nothing
   where
     moveEither :: Either PeekException (Maybe a) -> Maybe (Either LogStr a)
@@ -141,11 +197,11 @@ syncServiceMessage = do
 
 -- | Helper, fires when a synchronization message arrived
 syncPeerMessage :: (SyncMonad t m, NetworkMonad t m, Store a)
-  => Peer -> m (Event t (SyncId, a))
+  => Peer -> m (Event t (SyncId, SyncItemId, a))
 syncPeerMessage peer = do
   msgE <- syncMessage
-  return $ fforMaybe msgE $ \(peer', i, msg) -> if peer == peer'
-    then Just (i, msg)
+  return $ fforMaybe msgE $ \(peer', i, itemId, msg) -> if peer == peer'
+    then Just (i, itemId, msg)
     else Nothing
 
 -- | Helper that finds id for name or create new id for the name.

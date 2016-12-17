@@ -15,6 +15,10 @@ import Text.Read
 -- | Application monad that is used for implementation of game API
 type AppMonad = SyncT Spider (TimerT Spider (NetworkT Spider (LoggingT Spider(GameMonad Spider))))
 
+-- | ID of counter object that is same on clients and server
+counterId :: SyncItemId
+counterId = 0
+
 -- Server application.
 -- The application should be generic in the host monad that is used
 appServer :: forall t m . (LoggingMonad t m, NetworkServer t m, SyncMonad t m)
@@ -47,7 +51,7 @@ appServer p = do
     tickE <- tickEvery (realToFrac (1 :: Double))
     performEvent_ $ ffor tickE $ const $ modifyExternalRef ref $ \n -> (n+1, ())
     dynCnt <- externalRefDynamic ref
-    _ <- syncToClients "counter" UnreliableMessage dynCnt
+    _ <- syncToClients counterId UnreliableMessage dynCnt
     return dynCnt
 
 -- | Find server address by host name or IP
@@ -61,7 +65,7 @@ resolveServer host serv = do
 -- | Client side logic of application
 clientLogic :: (LoggingMonad t m, SyncMonad t m, NetworkClient t m) => m ()
 clientLogic = do
-  dynCnt :: Dynamic t Int <- syncFromServer "counter" 0
+  dynCnt :: Dynamic t Int <- syncFromServer counterId 0
   logInfoE $ ffor (updated dynCnt) $ \n -> "Counter state: " <> showl n
 
 -- Client application.
