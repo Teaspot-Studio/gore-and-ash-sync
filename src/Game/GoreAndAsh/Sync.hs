@@ -30,8 +30,10 @@ module Game.GoreAndAsh.Sync(
   , SyncName
   , SyncItemId
   , SyncMonad(..)
+  , conditional
   , syncWithName
   , syncToClients
+  , syncToAllClients
   , syncFromServer
   ) where
 

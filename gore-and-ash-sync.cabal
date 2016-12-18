@@ -144,3 +144,41 @@ executable gore-and-ash-sync-example02
     UndecidableInstances
 
   ghc-options: -threaded
+
+executable gore-and-ash-sync-example03
+  if flag(examples)
+    buildable: True
+  else
+    buildable: False
+
+  hs-source-dirs:     examples
+  main-is:            Example03.hs
+  default-language:   Haskell2010
+  build-depends:
+      base                  >= 4.7      && < 5
+    , exceptions            >= 0.8      && < 0.9
+    , gore-and-ash          >= 2.0      && < 2.1
+    , gore-and-ash-logging  >= 3.0      && < 3.1
+    , gore-and-ash-network  >= 2.0      && < 2.1
+    , gore-and-ash-sync
+    , lens                  >= 4.14     && < 4.15
+    , mtl                   >= 2.2      && < 2.3
+    , network               >= 2.6      && < 2.7
+
+  default-extensions:
+    BangPatterns
+    DeriveFunctor
+    DeriveGeneric
+    FlexibleContexts
+    FlexibleInstances
+    FunctionalDependencies
+    GeneralizedNewtypeDeriving
+    MultiParamTypeClasses
+    OverloadedStrings
+    RecordWildCards
+    ScopedTypeVariables
+    StandaloneDeriving
+    TypeFamilies
+    UndecidableInstances
+
+  ghc-options: -threaded

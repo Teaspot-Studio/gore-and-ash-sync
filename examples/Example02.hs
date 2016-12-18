@@ -59,7 +59,7 @@ appServer p = do
     tickE <- tickEvery (fromIntegral $ i + 1)
     performEvent_ $ ffor tickE $ const $ modifyExternalRef ref $ \n -> (n+1, ())
     dynCnt <- externalRefDynamic ref
-    _ <- syncToClients counterId UnreliableMessage dynCnt
+    _ <- syncToAllClients counterId UnreliableMessage dynCnt
     return dynCnt
 
 -- | Find server address by host name or IP

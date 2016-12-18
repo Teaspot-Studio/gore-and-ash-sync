@@ -51,7 +51,8 @@ appServer p = do
     tickE <- tickEvery (realToFrac (1 :: Double))
     performEvent_ $ ffor tickE $ const $ modifyExternalRef ref $ \n -> (n+1, ())
     dynCnt <- externalRefDynamic ref
-    _ <- syncToAllClients counterId UnreliableMessage dynCnt
+    filteredCnt <- conditional dynCnt $ \a -> return $ (a `mod` 3) == 0
+    _ <- syncToAllClients counterId UnreliableMessage filteredCnt
     return dynCnt
 
 -- | Find server address by host name or IP

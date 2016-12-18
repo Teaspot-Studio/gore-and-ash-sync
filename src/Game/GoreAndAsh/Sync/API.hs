@@ -12,9 +12,10 @@ module Game.GoreAndAsh.Sync.API(
     SyncName
   , SyncItemId
   , SyncMonad(..)
+  , conditional
   , syncWithName
   , syncToClients
-  , syncToClientsUniq
+  , syncToAllClients
   , syncFromServer
   -- * Internal
   , NameMap
@@ -88,29 +89,32 @@ instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), MonadMask (mt m), MonadTra
     syncUnsafeAddId a b = lift $ syncUnsafeAddId a b
     {-# INLINE syncUnsafeAddId #-}
 
--- TODO: Idea to make named dynamic NDynamic t a = (SyncName, Dynamic t a)
-
 -- | Start streaming given dynamic value to all connected clients.
 --
 -- Intended to be called on server side and a corresponding 'syncFromServer'
 -- call is needed on client side.
 syncToClients :: (SyncMonad t m, NetworkServer t m, Store a)
+  -- | Fires when user wants to add/remove peers from set of receives of the value
+  => Event t (M.Map Peer PeerAction)
+  -- | Filter peers that is connected at the first time. Return 'False' at
+  -- connected peer will not be placed in the
+  -> (Peer -> PushM t Bool)
   -- | Unique name of synchronization value withing current scope
-  => SyncItemId
+  -> SyncItemId
   -- | Underlying message type for sending, you can set unrelable delivery if
   -- the data rapidly changes.
   -> MessageType
   -- | Source of data to transfer to clients. Note that updated to clients
   -- are performed each time the dynamic fires event the current value of
-  -- internal behavior isn't changed. See also: 'syncToClientsUniq'.
+  -- internal behavior isn't changed.
   -> Dynamic t a
   -- | Returns event that fires when a value was synced to given peers
   -> m (Event t [Peer])
-syncToClients itemId mt da = do
+syncToClients peerManual checkPeer itemId mt da = do
   opts <- syncOptions
   let chan = opts ^. syncOptionsChannel
   i <- makeSyncName =<< syncCurrentName
-  dynSended <- processPeers $ \peer -> do
+  dynSended <- peersCollection peerManual checkPeer $ \peer -> do
     -- listen for requests
     reqE <- syncRequestMessage peer i itemId
     let respE = tagPromptlyDyn da reqE
@@ -122,49 +126,40 @@ syncToClients itemId mt da = do
     peerChanSend peer chan msgE
   pure . switchPromptlyDyn $ fmap (fmap M.keys . mergeMap) dynSended
 
--- | Start streaming given dynamic value to all connected clients only if given
--- dynamic is acturally changed.
+-- | Start streaming given dynamic value to all connected clients.
 --
 -- Intended to be called on server side and a corresponding 'syncFromServer'
 -- call is needed on client side.
-syncToClientsUniq :: (SyncMonad t m, NetworkServer t m, Store a, Eq a)
+syncToAllClients :: (SyncMonad t m, NetworkServer t m, Store a)
   -- | Unique name of synchronization value withing current scope
   => SyncItemId
   -- | Underlying message type for sending, you can set unrelable delivery if
   -- the data rapidly changes.
   -> MessageType
   -- | Source of data to transfer to clients. Note that updated to clients
-  -- are performed only when new value of the dynamic is actually different
-  -- from previous one.
-  -> UniqDynamic t a
+  -- are performed each time the dynamic fires event the current value of
+  -- internal behavior isn't changed.
+  -> Dynamic t a
   -- | Returns event that fires when a value was synced to given peers
   -> m (Event t [Peer])
-syncToClientsUniq itemId mt = syncToClients itemId mt . fromUniqDynamic
+syncToAllClients = syncToClients never (const $ pure True)
 
--- -- | Start streaming given dynamic value to connected clients if the peer
--- -- and the new value passes specified predicate test.
--- --
--- -- Intended to be called on server side and a corresponding 'syncFromServer'
--- -- call is needed on client side.
--- syncToClientsCond :: (SyncMonad t m, NetworkServer t m, Store a)
---   -- | Unique name of synchronization value withing current scope
---   => SyncItemId
---   -- | Underlying message type for sending, you can set unrelable delivery if
---   -- the data rapidly changes.
---   -> MessageType
---   -- | Source of data to transfer to clients. Note that updated to clients
---   -- are performed each time the dynamic fires event the current value of
---   -- internal behavior isn't changed. See also: 'syncToClientsUniq'.
---   -> Dynamic t a
---   -- | Condition that is checked every time the dynamic value is updated.
---   -- If it returns 'True' the value will be sended to given peer.
---   -> (a -> Bool)
---   -- | Returns event that fires when a value was synced to given peers
---   -> m (Event t [Peer])
--- syncToClientsCond itemId mt da predicate = do
-
---   syncToClients itemId mt da'
-
+-- | Update dynamic value only if given predicate returns 'True'.
+--
+-- The helper is intended to be used with 'syncToClients' to create
+-- conditional synchronisation.
+conditional :: (Reflex t, MonadHold t m)
+  => Dynamic t a -- ^ Original dynamic
+  -> (a -> PushM t Bool) -- ^ Predicate, return 'True' to pass value into new dynamic
+  -> m (Dynamic t a) -- ^ Filtered dynamic
+conditional da predicate = do
+  ai <- sample . current $ da
+  let ae = push predicate' . updated $ da
+  holdDyn ai ae
+  where
+    predicate' a = do
+      res <- predicate a
+      return $ if res then Just a else Nothing
 
 -- | Receive stream of values from remote server.
 --
