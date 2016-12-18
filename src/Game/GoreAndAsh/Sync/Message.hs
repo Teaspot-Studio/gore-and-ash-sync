@@ -14,6 +14,7 @@ module Game.GoreAndAsh.Sync.Message(
   , SyncMessage(..)
   , SyncServiceMessage(..)
   , encodeSyncMessage
+  , encodeSyncRequest
   , encodeSyncServiceMsg
   , decodeSyncMessage
   ) where
@@ -47,11 +48,16 @@ type SyncId = Word32
 data SyncMessage =
   -- | Utility messages
     SyncServiceMessage !SyncServiceMessage
-  -- | Payloads of synchronizations
+  -- | Payloads of synchronizations that is sended by source of value to consumers
   | SyncPayloadMessage {
       syncId      :: !SyncId     -- ^ Scope id
     , syncItemId  :: !SyncItemId -- ^ Specific value id
     , syncPayload :: !ByteString -- ^ Payload with updated value
+    }
+  -- | Request of value from consumer (needed for rarely changing values)
+  | SyncRequestMessage {
+      syncId      :: !SyncId     -- ^ Scope id
+    , syncItemId  :: !SyncItemId -- ^ Specific value id
     }
   deriving (Generic)
 
@@ -67,9 +73,13 @@ data SyncServiceMessage =
 
 instance Store SyncServiceMessage
 
--- | Convert synch message into message of underlying network module
+-- | Convert sync message into message of underlying network module
 encodeSyncMessage :: Store a => MessageType -> SyncId -> SyncItemId -> a -> Message
 encodeSyncMessage mt i ii a = Message mt (encode $ SyncPayloadMessage i ii $ encode a)
+
+-- | Convert sync message into message of underlying network module
+encodeSyncRequest :: MessageType -> SyncId -> SyncItemId -> Message
+encodeSyncRequest mt i ii = Message mt (encode $ SyncRequestMessage i ii)
 
 -- | Helper for encoding service messages
 encodeSyncServiceMsg :: MessageType -> SyncServiceMessage -> Message

@@ -25,6 +25,7 @@ import Control.Lens ((^.))
 import Control.Monad
 import Control.Monad.Catch
 import Control.Monad.Trans
+import Data.Bifunctor
 import Data.Monoid
 import Data.Store
 import Game.GoreAndAsh.Core
@@ -110,8 +111,13 @@ syncToClients itemId mt da = do
   let chan = opts ^. syncOptionsChannel
   i <- makeSyncName =<< syncCurrentName
   dynSended <- processPeers $ \peer -> do
+    -- listen for requests
+    reqE <- syncRequestMessage peer i itemId
+    let respE = tagPromptlyDyn da reqE
+    -- send updates
     buildE <- getPostBuild
-    let updatedE = leftmost [updated da, tagPromptlyDyn da buildE]
+    let initialE = tagPromptlyDyn da buildE
+        updatedE = leftmost [updated da, respE, initialE]
         msgE = fmap (encodeSyncMessage mt i itemId) updatedE
     peerChanSend peer chan msgE
   pure . switchPromptlyDyn $ fmap (fmap M.keys . mergeMap) dynSended
@@ -135,6 +141,31 @@ syncToClientsUniq :: (SyncMonad t m, NetworkServer t m, Store a, Eq a)
   -> m (Event t [Peer])
 syncToClientsUniq itemId mt = syncToClients itemId mt . fromUniqDynamic
 
+-- -- | Start streaming given dynamic value to connected clients if the peer
+-- -- and the new value passes specified predicate test.
+-- --
+-- -- Intended to be called on server side and a corresponding 'syncFromServer'
+-- -- call is needed on client side.
+-- syncToClientsCond :: (SyncMonad t m, NetworkServer t m, Store a)
+--   -- | Unique name of synchronization value withing current scope
+--   => SyncItemId
+--   -- | Underlying message type for sending, you can set unrelable delivery if
+--   -- the data rapidly changes.
+--   -> MessageType
+--   -- | Source of data to transfer to clients. Note that updated to clients
+--   -- are performed each time the dynamic fires event the current value of
+--   -- internal behavior isn't changed. See also: 'syncToClientsUniq'.
+--   -> Dynamic t a
+--   -- | Condition that is checked every time the dynamic value is updated.
+--   -- If it returns 'True' the value will be sended to given peer.
+--   -> (a -> Bool)
+--   -- | Returns event that fires when a value was synced to given peers
+--   -> m (Event t [Peer])
+-- syncToClientsCond itemId mt da predicate = do
+
+--   syncToClients itemId mt da'
+
+
 -- | Receive stream of values from remote server.
 --
 -- Matches to call of 'syncToClients', should be called on client side.
@@ -143,66 +174,77 @@ syncFromServer :: (SyncMonad t m, NetworkClient t m, Store a)
   -> a -- ^ Initial value
   -> m (Dynamic t a)
 syncFromServer itemId initVal = do
-  name <- syncCurrentName
+  opts <- syncOptions
+  let chan = opts ^. syncOptionsChannel
   let pureInitVal = return $ pure initVal
+  name <- syncCurrentName
   fmap join $ whenConnected pureInitVal $ \peer -> do -- first wait until connected
     fmap join $ resolveSyncName name pureInitVal $ \i -> do -- wait for id
-      msgE <- syncPeerMessage peer
-      let neededMsgE = fforMaybe msgE $ \(i', itemId', a) -> if i == i' && itemId == itemId'
-            then Just a
-            else Nothing
-      holdDyn initVal neededMsgE -- here collect updates in dynamic
+      -- send initial request to inform client of initial value for rarely changing values
+      buildE <- getPostBuild
+      let reqE = const (encodeSyncRequest ReliableMessage i itemId) <$> buildE
+      _ <- peerChanSend peer chan reqE
+      -- listen for responds of server
+      msgE <- syncPeerMessage peer i itemId
+      holdDyn initVal msgE -- here collect updates in dynamic
 
 -- syncToServer :: (SyncMonad t m, NetworkClient t m, Store a)
 --   => SyncName -- ^ Unique name of synchronization object
 --   ->
 
--- | Helper that fires when a synchronization message arrives
-syncMessage :: (SyncMonad t m, NetworkMonad t m, Store a)
-  => m (Event t (Peer, SyncId, SyncItemId, a))
-syncMessage = do
+-- | Helper that fires when a synchronization message in interest arrives
+syncMessage :: (SyncMonad t m, NetworkMonad t m)
+  => (Peer -> SyncMessage -> Maybe a) -> m (Event t a)
+syncMessage predicate = do
   opts <- syncOptions
   let chan = opts ^. syncOptionsChannel
   msgE <- chanMessage chan
   logEitherWarn $ fforMaybe msgE $ \(peer, bs) -> moveEither $ do
     msg <- decodeSyncMessage bs
-    case msg of
-      SyncPayloadMessage i itemId bs' -> do
-        msg' <- decode bs'
-        return $ Just (peer, i, itemId, msg')
-      _ -> return Nothing
+    return $ predicate peer msg
   where
     moveEither :: Either PeekException (Maybe a) -> Maybe (Either LogStr a)
     moveEither e = case e of
       Left er -> Just . Left $ showl er
       Right ma -> Right <$> ma
+
+-- | Helper that fires when a sync request arrives
+syncRequestMessage :: (SyncMonad t m, NetworkMonad t m)
+  => Peer -- ^ Expected peer as source of message
+  -> SyncId -- ^ Id of scope that is expected
+  -> SyncItemId -- ^ Id of synch item that is expected
+  -> m (Event t ())
+syncRequestMessage peer i ii = syncMessage $ \peer' msg -> case msg of
+  SyncRequestMessage i' ii' -> if peer' == peer && i' == i && ii' == ii
+    then Just ()
+    else Nothing
+  _ -> Nothing
 
 -- | Helper, fires when a synchronization message arrived
 syncServiceMessage :: (SyncMonad t m, NetworkMonad t m)
   => m (Event t (Peer, SyncServiceMessage))
-syncServiceMessage = do
-  opts <- syncOptions
-  let chan = opts ^. syncOptionsChannel
-  msgE <- chanMessage chan
-  logEitherWarn $ fforMaybe msgE $ \(peer, bs) -> moveEither $ do
-    msg <- decodeSyncMessage bs
-    case msg of
-      SyncServiceMessage smsg -> return $ Just (peer, smsg)
-      _ -> return Nothing
-  where
-    moveEither :: Either PeekException (Maybe a) -> Maybe (Either LogStr a)
-    moveEither e = case e of
-      Left er -> Just . Left $ showl er
-      Right ma -> Right <$> ma
+syncServiceMessage = syncMessage $ \peer msg -> case msg of
+  SyncServiceMessage smsg -> Just (peer, smsg)
+  _ -> Nothing
 
 -- | Helper, fires when a synchronization message arrived
 syncPeerMessage :: (SyncMonad t m, NetworkMonad t m, Store a)
-  => Peer -> m (Event t (SyncId, SyncItemId, a))
-syncPeerMessage peer = do
-  msgE <- syncMessage
-  return $ fforMaybe msgE $ \(peer', i, itemId, msg) -> if peer == peer'
-    then Just (i, itemId, msg)
-    else Nothing
+  => Peer -- ^ Peer that should send the message
+  -> SyncId -- ^ Scope id that is expected
+  -> SyncItemId -- ^ Sync item id in scope
+  -> m (Event t a)
+syncPeerMessage peer i itemId = do
+  msgE <- syncMessage $ \peer' msg -> case msg of
+    SyncPayloadMessage i' itemId' bs -> if peer == peer' && i == i' && itemId == itemId'
+      then Just bs
+      else Nothing
+    _ -> Nothing
+  logEitherWarn $ ffor msgE $ first mkDecodeFailMsg . decode
+  where
+    mkDecodeFailMsg e = "Sync: Failed to decode payload for scope: "
+      <> showl i <> ", with item id: "
+      <> showl itemId <> ", error: "
+      <> showl e
 
 -- | Helper that finds id for name or create new id for the name.
 makeSyncName :: SyncMonad t m
