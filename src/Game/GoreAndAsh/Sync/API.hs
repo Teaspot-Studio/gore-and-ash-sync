@@ -12,10 +12,14 @@ module Game.GoreAndAsh.Sync.API(
     SyncName
   , SyncItemId
   , SyncMonad(..)
+  , ClientSynced(..)
+  , serverRejected
   , conditional
   , syncWithName
   , syncToClients
   , syncToAllClients
+  , syncFromClients
+  , syncToServer
   , syncFromServer
   -- * Internal
   , NameMap
@@ -35,6 +39,7 @@ import Game.GoreAndAsh.Network
 import Game.GoreAndAsh.Sync.Message
 import Game.GoreAndAsh.Sync.Options
 import Game.GoreAndAsh.Time
+import GHC.Generics
 
 import qualified Data.HashMap.Strict as H
 import qualified Data.Map.Strict as M
@@ -144,6 +149,40 @@ syncToAllClients :: (SyncMonad t m, NetworkServer t m, Store a)
   -> m (Event t [Peer])
 syncToAllClients = syncToClients never (const $ pure True)
 
+-- | Synchronisation from client to server. Server can reject values and send actuall value.
+--
+-- Server has to call corresponding 'syncToServer' function to receive updates.
+syncFromClients :: (SyncMonad t m, NetworkServer t m, Store a)
+  -- | Fires when user wants to add/remove peers from set of receives of the value
+  => Event t (M.Map Peer PeerAction)
+  -- | Filter peers that is connected at the first time. Return 'False' at
+  -- connected peer will not be placed in the
+  -> (Peer -> PushM t Bool)
+  -- | Unique name of synchronization value withing current scope
+  -> SyncItemId
+  -- | Make initial value
+  -> (Peer -> m a)
+  -- | Function that checks state from client is actually valid, if the predicate
+  -- returns 'Just', server will send actual local state to client.
+  -> (Peer -> a -> PushM t (Maybe a))
+  -- | Collected state for each Peer.
+  -> m (Dynamic t (M.Map Peer a))
+syncFromClients peerManual checkPeer itemId mkInit predicate = do
+  opts <- syncOptions
+  let chan = opts ^. syncOptionsChannel
+  i <- makeSyncName =<< syncCurrentName
+  dynResults <- peersCollection peerManual checkPeer $ \peer -> do
+    -- listen for state
+    msgE <- syncPeerMessage peer i itemId
+    -- check rejection from server
+    let rejectE = push (predicate peer) msgE
+        rejectMsgE = encodeSyncMessage ReliableMessage i itemId <$> rejectE
+    _ <- peerChanSend peer chan rejectMsgE
+    -- collect state on server side
+    initVal <- mkInit peer
+    holdDyn initVal $ leftmost [rejectE, msgE]
+  return $ joinDynThroughMap dynResults
+
 -- | Update dynamic value only if given predicate returns 'True'.
 --
 -- The helper is intended to be used with 'syncToClients' to create
@@ -183,9 +222,57 @@ syncFromServer itemId initVal = do
       msgE <- syncPeerMessage peer i itemId
       holdDyn initVal msgE -- here collect updates in dynamic
 
--- syncToServer :: (SyncMonad t m, NetworkClient t m, Store a)
---   => SyncName -- ^ Unique name of synchronization object
---   ->
+-- | Result of execution of 'syncToServer'
+data ClientSynced a =
+    ClientSentToServer -- ^ Client sent state to server
+  | ServerRejected a -- ^ Server rejected last state and returned valid one
+  deriving (Generic, Show, Read)
+
+-- | Pass only rejected-by-server messages
+serverRejected :: Reflex t => Event t (ClientSynced a) -> Event t a
+serverRejected = fmapMaybe $ \case
+  ServerRejected a -> Just a
+  _ -> Nothing
+
+-- | Synchronisation from client to server. Server can reject values and send actual state.
+--
+-- Server has to call corresponding 'syncFromClients' function to receive updates.
+syncToServer :: (SyncMonad t m, NetworkClient t m, Store a)
+  -- | Unique name of synchronization value withing current scope
+  => SyncItemId
+  -- | Underlying message type for sending, you can set unrelable delivery if
+  -- the data rapidly changes.
+  -> MessageType
+  -- | Source of data to transfer to server. Note that updates to server
+  -- are sent each time the dynamic fires event the current value of
+  -- internal behavior isn't changed.
+  -> Dynamic t a
+  -- | Event that fires each time a new message is passed to server or server
+  -- rejected client state.
+  --
+  -- Note: that you might like to update input dynamic with corrected values via
+  -- mfix cycle.
+  -> m (Event t (ClientSynced a))
+syncToServer itemId mt da = do
+  opts <- syncOptions
+  let chan = opts ^. syncOptionsChannel
+  name <- syncCurrentName
+  dynEv <- whenConnected (pure never) $ \peer -> do -- first wait until connected
+    dynEv <- resolveSyncName name (pure never) $ \i -> do -- wait for id
+      -- we need to send initial request to inform client of initial value for rarely changing values
+      buildE <- getPostBuild
+      let initialE = encodeSyncMessage mt i itemId <$> tagPromptlyDyn da buildE
+          updatedE = encodeSyncMessage mt i itemId <$> updated da
+      sendedE <- peerChanSend peer chan $ leftmost [updatedE, initialE]
+      -- listen for responds of server
+      msgE <- syncPeerMessage peer i itemId
+      -- we can either inform about rejected value or that we synced to server
+      return $ leftmost [
+          ServerRejected <$> msgE
+        , const ClientSentToServer <$> sendedE
+        ]
+    return $ switchPromptlyDyn dynEv
+  return $ switchPromptlyDyn dynEv
 
 -- | Helper that fires when a synchronization message in interest arrives
 syncMessage :: (SyncMonad t m, NetworkMonad t m)
