@@ -45,6 +45,14 @@ import GHC.Generics
 import qualified Data.HashMap.Strict as H
 import qualified Data.Map.Strict as M
 
+-- TODO, what is left to finish the module:
+-- 1. Scope level peer filtering for sync:
+--   * per-item peer filter is too heavy and leads for complication of signatures
+--   * scope level should be composable. Nesting of scopes should (or not?) create nested
+--     collections of peers.
+-- 2. Prediction utilities.
+-- 3. Remote collections.
+
 -- | Bijection between name and id of synchronized object
 type NameMap = H.HashMap SyncName SyncId
 
