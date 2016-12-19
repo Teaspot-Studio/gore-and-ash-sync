@@ -1,3 +1,11 @@
+-- | Test conditional sync. Server has local counter that is synced to clients,
+-- but value is sent only on certain condition.
+--
+-- Usage:
+--
+-- * Start server: `gore-and-ash-sync-example03 server 5656`
+--
+-- * Start client: `gore-and-ash-sync-example03 client localhost 5656`
 module Main where
 
 import Control.Lens

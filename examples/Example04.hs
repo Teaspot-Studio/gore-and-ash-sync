@@ -1,12 +1,11 @@
--- | Demonstrate dynamic scoping. Server starts five different counters that tick
--- at different time and have different synchronisation scopes. A client have to
--- resolve scope id before it can sync.
+-- | Show client to server sync. Clients have local counter and server tracks
+-- all the counters of clients.
 --
 -- Usage:
 --
--- * Start server: `gore-and-ash-sync-example02 server 5656`
+-- * Start server: `gore-and-ash-sync-example04 server 5656`
 --
--- * Start client: `gore-and-ash-sync-example02 client localhost 5656`
+-- * Start client: `gore-and-ash-sync-example04 client localhost 5656`
 module Main where
 
 import Control.Lens
@@ -21,16 +20,14 @@ import Network.Socket
 import System.Environment
 import Text.Read
 
+import qualified Data.Foldable as F
+
 -- | Application monad that is used for implementation of game API
 type AppMonad = SyncT Spider (TimerT Spider (NetworkT Spider (LoggingT Spider(GameMonad Spider))))
 
 -- | ID of counter object that is same on clients and server
 counterId :: SyncItemId
 counterId = 0
-
--- | Number of dynamic counters that is created both on client and server
-countersCount :: Int
-countersCount = 5
 
 -- Server application.
 -- The application should be generic in the host monad that is used
@@ -54,22 +51,16 @@ appServer p = do
   discE <- peerDisconnected
   logInfoE $ ffor discE $ const $ "Peer is disconnected..."
 
-  counterDyns <- makeSharedCounters countersCount
-  let countersDyn = sequence counterDyns
+  countersDyn <- makeSharedCounters
   logInfoE $ ffor (updated countersDyn) $ \ns -> "Counters state: " <> showl ns
   return ()
   where
-  makeSharedCounters :: Int -> m [Dynamic t Int]
-  makeSharedCounters n = mapM makeSharedCounter [0 .. n-1]
-
-  makeSharedCounter :: Int -> m (Dynamic t Int)
-  makeSharedCounter i = syncWithName ("counter" <> show i) $ do
-    ref <- newExternalRef (0 :: Int)
-    tickE <- tickEvery (fromIntegral $ i + 1)
-    performEvent_ $ ffor tickE $ const $ modifyExternalRef ref $ \n -> (n+1, ())
-    dynCnt <- externalRefDynamic ref
-    _ <- syncToAllClients counterId UnreliableMessage dynCnt
-    return dynCnt
+  makeSharedCounters :: m (Dynamic t [Int])
+  makeSharedCounters = do
+    let makeInitial = const $ pure 0
+        rejectBehavior = const . const $ pure Nothing
+    dynMap <- syncFromAllClients counterId makeInitial rejectBehavior
+    return $ F.toList <$> dynMap
 
 -- | Find server address by host name or IP
 resolveServer :: MonadIO m => HostName -> ServiceName -> m SockAddr
@@ -82,15 +73,17 @@ resolveServer host serv = do
 -- | Client side logic of application
 clientLogic :: forall t m . (LoggingMonad t m, SyncMonad t m, NetworkClient t m) => m ()
 clientLogic = do
-  counterDyns <- makeSharedCounters countersCount
-  let countersDyn = sequence counterDyns
-  logInfoE $ ffor (updated countersDyn) $ \ns -> "Counters state: " <> showl ns
+  counterDyn <- makeSharedCounter
+  logInfoE $ ffor (updated counterDyn) $ \n -> "Counter state: " <> showl n
   where
-  makeSharedCounters :: Int -> m [Dynamic t Int]
-  makeSharedCounters n = mapM makeSharedCounter [0 .. n-1]
-
-  makeSharedCounter :: Int -> m (Dynamic t Int)
-  makeSharedCounter i = syncWithName ("counter" <> show i) $ syncFromServer counterId 0
+  makeSharedCounter :: m (Dynamic t Int)
+  makeSharedCounter = do
+    ref <- newExternalRef (0 :: Int)
+    tickE <- tickEvery (realToFrac (1 :: Double))
+    performEvent_ $ ffor tickE $ const $ modifyExternalRef ref $ \n -> (n+1, ())
+    dynCnt <- externalRefDynamic ref
+    _ <- syncToServer counterId UnreliableMessage dynCnt
+    return dynCnt
 
 -- Client application.
 -- The application should be generic in the host monad that is used

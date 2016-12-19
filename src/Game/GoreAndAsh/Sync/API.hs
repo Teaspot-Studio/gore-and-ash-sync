@@ -19,6 +19,7 @@ module Game.GoreAndAsh.Sync.API(
   , syncToClients
   , syncToAllClients
   , syncFromClients
+  , syncFromAllClients
   , syncToServer
   , syncFromServer
   -- * Internal
@@ -182,6 +183,21 @@ syncFromClients peerManual checkPeer itemId mkInit predicate = do
     initVal <- mkInit peer
     holdDyn initVal $ leftmost [rejectE, msgE]
   return $ joinDynThroughMap dynResults
+
+-- | Synchronisation from client to server. Server can reject values and send actuall value.
+--
+-- Server has to call corresponding 'syncToServer' function to receive updates.
+syncFromAllClients :: (SyncMonad t m, NetworkServer t m, Store a)
+  -- | Unique name of synchronization value withing current scope
+  => SyncItemId
+  -- | Make initial value
+  -> (Peer -> m a)
+  -- | Function that checks state from client is actually valid, if the predicate
+  -- returns 'Just', server will send actual local state to client.
+  -> (Peer -> a -> PushM t (Maybe a))
+  -- | Collected state for each Peer.
+  -> m (Dynamic t (M.Map Peer a))
+syncFromAllClients = syncFromClients never (const $ pure True)
 
 -- | Update dynamic value only if given predicate returns 'True'.
 --

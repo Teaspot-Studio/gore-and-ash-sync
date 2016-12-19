@@ -1,3 +1,12 @@
+-- | Demo of simpliest sync scenario. Server has a counter that is updated each
+-- second. A client connects to server and receives notifications over network
+-- each time the server counter ticks.
+--
+-- Usage:
+--
+-- * Start server: `gore-and-ash-sync-example01 server 5656`
+--
+-- * Start client: `gore-and-ash-sync-example01 client localhost 5656`
 module Main where
 
 import Control.Lens
