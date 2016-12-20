@@ -15,6 +15,10 @@ module Game.GoreAndAsh.Sync.API(
   , ClientSynced(..)
   , serverRejected
   , conditional
+  , predict
+  , predictMaybe
+  , predictM
+  , predictMaybeM
   , syncWithName
   , syncToClient
   , syncToClients
@@ -48,8 +52,7 @@ import qualified Data.HashMap.Strict as H
 import qualified Data.Map.Strict as M
 
 -- TODO, what is left to finish the module:
--- 1. Prediction utilities.
--- 2. Remote collections.
+-- 1. Remote collections.
 
 -- | Bijection between name and id of synchronized object
 type NameMap = H.HashMap SyncName SyncId
@@ -268,6 +271,86 @@ conditional da predicate = do
     predicate' a = do
       res <- predicate a
       return $ if res then Just a else Nothing
+
+-- | Make predictions about next value of dynamic. This helper should be handy
+-- for implementing client side prediction of values from server.
+predict :: (MonadAppHost t m)
+  -- | Original dynamic. Common case is dynamic from 'syncFromServer' function.
+  => Dynamic t a
+  -- | Event that fires when we need to calculate next prediction. That can be
+  -- timer tick or any other event that fires between updates of original dynamic.
+  -> Event t b
+  -- | Prediction function that builds new 'a' value from prediction event value
+  -- and current dynamic value or value from previous prediction step.
+  -> (b -> a -> a)
+  -- | Resulted predicted dynamic value. Each time original event fires, all
+  -- predicted values are substituted with the new one.
+  -> m (Dynamic t a)
+predict origDyn tickE predictFunc = do
+  dynDyn <- holdAppHost (pure origDyn) (predict' <$> updated origDyn)
+  return $ join dynDyn
+  where
+    predict' a = foldDyn predictFunc a tickE
+
+-- | Make predictions about next value of dynamic. This helper should be handy
+-- for implementing client side prediction of values from server.
+predictMaybe :: (MonadAppHost t m)
+  -- | Original dynamic. Common case is dynamic from 'syncFromServer' function.
+  => Dynamic t a
+  -- | Event that fires when we need to calculate next prediction. That can be
+  -- timer tick or any other event that fires between updates of original dynamic.
+  -> Event t b
+  -- | Prediction function that builds new 'a' value from prediction event value
+  -- and current dynamic value or value from previous prediction step.
+  -> (b -> a -> Maybe a)
+  -- | Resulted predicted dynamic value. Each time original event fires, all
+  -- predicted values are substituted with the new one.
+  -> m (Dynamic t a)
+predictMaybe origDyn tickE predictFunc = do
+  dynDyn <- holdAppHost (pure origDyn) (predict' <$> updated origDyn)
+  return $ join dynDyn
+  where
+    predict' a = foldDynMaybe predictFunc a tickE
+
+-- | Make predictions about next value of dynamic. This helper should be handy
+-- for implementing client side prediction of values from server.
+predictM :: (MonadAppHost t m)
+  -- | Original dynamic. Common case is dynamic from 'syncFromServer' function.
+  => Dynamic t a
+  -- | Event that fires when we need to calculate next prediction. That can be
+  -- timer tick or any other event that fires between updates of original dynamic.
+  -> Event t b
+  -- | Prediction function that builds new 'a' value from prediction event value
+  -- and current dynamic value or value from previous prediction step.
+  -> (b -> a -> PushM t a)
+  -- | Resulted predicted dynamic value. Each time original event fires, all
+  -- predicted values are substituted with the new one.
+  -> m (Dynamic t a)
+predictM origDyn tickE predictFunc = do
+  dynDyn <- holdAppHost (pure origDyn) (predict' <$> updated origDyn)
+  return $ join dynDyn
+  where
+    predict' a = foldDynM predictFunc a tickE
+
+-- | Make predictions about next value of dynamic. This helper should be handy
+-- for implementing client side prediction of values from server.
+predictMaybeM :: (MonadAppHost t m)
+  -- | Original dynamic. Common case is dynamic from 'syncFromServer' function.
+  => Dynamic t a
+  -- | Event that fires when we need to calculate next prediction. That can be
+  -- timer tick or any other event that fires between updates of original dynamic.
+  -> Event t b
+  -- | Prediction function that builds new 'a' value from prediction event value
+  -- and current dynamic value or value from previous prediction step.
+  -> (b -> a -> PushM t (Maybe a))
+  -- | Resulted predicted dynamic value. Each time original event fires, all
+  -- predicted values are substituted with the new one.
+  -> m (Dynamic t a)
+predictMaybeM origDyn tickE predictFunc = do
+  dynDyn <- holdAppHost (pure origDyn) (predict' <$> updated origDyn)
+  return $ join dynDyn
+  where
+    predict' a = foldDynMaybeM predictFunc a tickE
 
 -- | Receive stream of values from remote server.
 --
