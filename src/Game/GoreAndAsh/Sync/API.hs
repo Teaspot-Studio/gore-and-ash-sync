@@ -16,8 +16,10 @@ module Game.GoreAndAsh.Sync.API(
   , serverRejected
   , conditional
   , syncWithName
+  , syncToClient
   , syncToClients
   , syncToAllClients
+  , syncFromClient
   , syncFromClients
   , syncFromAllClients
   , syncToServer
@@ -46,12 +48,8 @@ import qualified Data.HashMap.Strict as H
 import qualified Data.Map.Strict as M
 
 -- TODO, what is left to finish the module:
--- 1. Scope level peer filtering for sync:
---   * per-item peer filter is too heavy and leads for complication of signatures
---   * scope level should be composable. Nesting of scopes should (or not?) create nested
---     collections of peers.
--- 2. Prediction utilities.
--- 3. Remote collections.
+-- 1. Prediction utilities.
+-- 2. Remote collections.
 
 -- | Bijection between name and id of synchronized object
 type NameMap = H.HashMap SyncName SyncId
@@ -103,6 +101,42 @@ instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), MonadMask (mt m), MonadTra
     syncUnsafeAddId a b = lift $ syncUnsafeAddId a b
     {-# INLINE syncUnsafeAddId #-}
 
+-- | Start streaming given dynamic value to specific client.
+--
+-- Intended to be called on server side and a corresponding 'syncFromServer'
+-- call is needed on client side.
+--
+-- You can group 'syncToClient' calls within single 'processPeers' or 'peersCollection'
+-- as it more efficient than calling 'syncToAllClients' for each dynamic for the
+-- same set of peers.
+syncToClient :: (SyncMonad t m, NetworkServer t m, Store a)
+  -- | Unique name of synchronization value withing current scope
+  => SyncItemId
+  -- | Underlying message type for sending, you can set unrelable delivery if
+  -- the data rapidly changes.
+  -> MessageType
+  -- | Source of data to transfer to clients. Note that updated to clients
+  -- are performed each time the dynamic fires event the current value of
+  -- internal behavior isn't changed.
+  -> Dynamic t a
+  -- | Client that is target of synchronisation.
+  -> Peer
+  -- | Returns event that fires when a value was synced to given peers
+  -> m (Event t ())
+syncToClient itemId mt da peer = do
+  opts <- syncOptions
+  let chan = opts ^. syncOptionsChannel
+  i <- makeSyncName =<< syncCurrentName
+  -- listen for requests
+  reqE <- syncRequestMessage peer i itemId
+  let respE = tagPromptlyDyn da reqE
+  -- send updates
+  buildE <- getPostBuild
+  let initialE = tagPromptlyDyn da buildE
+      updatedE = leftmost [updated da, respE, initialE]
+      msgE = fmap (encodeSyncMessage mt i itemId) updatedE
+  peerChanSend peer chan msgE
+
 -- | Start streaming given dynamic value to all connected clients.
 --
 -- Intended to be called on server side and a corresponding 'syncFromServer'
@@ -125,19 +159,8 @@ syncToClients :: (SyncMonad t m, NetworkServer t m, Store a)
   -- | Returns event that fires when a value was synced to given peers
   -> m (Event t [Peer])
 syncToClients peerManual checkPeer itemId mt da = do
-  opts <- syncOptions
-  let chan = opts ^. syncOptionsChannel
-  i <- makeSyncName =<< syncCurrentName
-  dynSended <- peersCollection peerManual checkPeer $ \peer -> do
-    -- listen for requests
-    reqE <- syncRequestMessage peer i itemId
-    let respE = tagPromptlyDyn da reqE
-    -- send updates
-    buildE <- getPostBuild
-    let initialE = tagPromptlyDyn da buildE
-        updatedE = leftmost [updated da, respE, initialE]
-        msgE = fmap (encodeSyncMessage mt i itemId) updatedE
-    peerChanSend peer chan msgE
+  dynSended <- peersCollection peerManual checkPeer $
+    syncToClient itemId mt da
   pure . switchPromptlyDyn $ fmap (fmap M.keys . mergeMap) dynSended
 
 -- | Start streaming given dynamic value to all connected clients.
@@ -161,6 +184,39 @@ syncToAllClients = syncToClients never (const $ pure True)
 -- | Synchronisation from client to server. Server can reject values and send actuall value.
 --
 -- Server has to call corresponding 'syncToServer' function to receive updates.
+--
+-- You probably want to group 'syncFromClient' calls within one scope of 'processPeers'
+-- or 'peersCollection' as it more efficient than multiple calls for 'syncFromClients'
+-- or 'syncFromAllClients'.
+syncFromClient :: (SyncMonad t m, NetworkServer t m, Store a)
+  -- | Unique name of synchronization value withing current scope
+  => SyncItemId
+  -- | Make initial value
+  -> m a
+  -- | Function that checks state from client is actually valid, if the predicate
+  -- returns 'Just', server will send actual local state to client.
+  -> (a -> PushM t (Maybe a))
+  -- | Peer that is listened for values.
+  -> Peer
+  -- | Collected state for each Peer.
+  -> m (Dynamic t a)
+syncFromClient itemId mkInit predicate peer = do
+  opts <- syncOptions
+  let chan = opts ^. syncOptionsChannel
+  i <- makeSyncName =<< syncCurrentName
+  -- listen for state
+  msgE <- syncPeerMessage peer i itemId
+  -- check whether we want to reject value
+  let rejectE = push predicate msgE
+      rejectMsgE = encodeSyncMessage ReliableMessage i itemId <$> rejectE
+  _ <- peerChanSend peer chan rejectMsgE
+  -- collect state on server side
+  initVal <- mkInit
+  holdDyn initVal $ leftmost [rejectE, msgE]
+
+-- | Synchronisation from clients to server. Server can reject values and send actuall value.
+--
+-- Server has to call corresponding 'syncToServer' function to receive updates.
 syncFromClients :: (SyncMonad t m, NetworkServer t m, Store a)
   -- | Fires when user wants to add/remove peers from set of receives of the value
   => Event t (M.Map Peer PeerAction)
@@ -177,19 +233,8 @@ syncFromClients :: (SyncMonad t m, NetworkServer t m, Store a)
   -- | Collected state for each Peer.
   -> m (Dynamic t (M.Map Peer a))
 syncFromClients peerManual checkPeer itemId mkInit predicate = do
-  opts <- syncOptions
-  let chan = opts ^. syncOptionsChannel
-  i <- makeSyncName =<< syncCurrentName
-  dynResults <- peersCollection peerManual checkPeer $ \peer -> do
-    -- listen for state
-    msgE <- syncPeerMessage peer i itemId
-    -- check rejection from server
-    let rejectE = push (predicate peer) msgE
-        rejectMsgE = encodeSyncMessage ReliableMessage i itemId <$> rejectE
-    _ <- peerChanSend peer chan rejectMsgE
-    -- collect state on server side
-    initVal <- mkInit peer
-    holdDyn initVal $ leftmost [rejectE, msgE]
+  dynResults <- peersCollection peerManual checkPeer $ \peer ->
+    syncFromClient itemId (mkInit peer) (predicate peer) peer
   return $ joinDynThroughMap dynResults
 
 -- | Synchronisation from client to server. Server can reject values and send actuall value.
