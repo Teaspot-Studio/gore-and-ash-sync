@@ -34,12 +34,21 @@ module Game.GoreAndAsh.Sync(
   , serverRejected
   , conditional
   , syncWithName
+  -- ** Server side
+  , syncToClient
   , syncToClients
   , syncToAllClients
+  , syncFromClient
   , syncFromClients
   , syncFromAllClients
+  -- ** Client side
   , syncToServer
   , syncFromServer
+  -- ** Prediction
+  , predict
+  , predictMaybe
+  , predictM
+  , predictMaybeM
   ) where
 
 import Game.GoreAndAsh.Sync.API as X

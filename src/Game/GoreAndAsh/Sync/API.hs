@@ -9,26 +9,30 @@ Portability : POSIX
 -}
 {-# LANGUAGE LambdaCase #-}
 module Game.GoreAndAsh.Sync.API(
+  -- * API
     SyncName
   , SyncItemId
   , SyncMonad(..)
   , ClientSynced(..)
   , serverRejected
   , conditional
-  , predict
-  , predictMaybe
-  , predictM
-  , predictMaybeM
   , syncWithName
+  -- ** Server side
   , syncToClient
   , syncToClients
   , syncToAllClients
   , syncFromClient
   , syncFromClients
   , syncFromAllClients
+  -- ** Client side
   , syncToServer
   , syncFromServer
-  -- * Internal
+  -- ** Prediction
+  , predict
+  , predictMaybe
+  , predictM
+  , predictMaybeM
+  -- * Internal API
   , NameMap
   , syncService
   ) where
