@@ -13,6 +13,7 @@ module Game.GoreAndAsh.Sync.Options(
   , SyncOptions
   , syncOptionsRole
   , syncOptionsChannel
+  , syncOptionsCollectionsChannel
   , syncOptionsResolveDelay
   , syncOptionsNext
   , defaultSyncOptions
@@ -33,15 +34,19 @@ data SyncRole =
 -- | Startup options of the sync module
 data SyncOptions s = SyncOptions {
   -- | Defines role of the node (use slave for clients, and master for servers)
-  _syncOptionsRole            :: SyncRole
+  _syncOptionsRole               :: SyncRole
   -- | Network channel to use for synchronization messages
   --
   -- Note: that option must be the same for all nodes.
-, _syncOptionsChannel         :: ChannelID
+, _syncOptionsChannel            :: ChannelID
+  -- | Network channel to use for synchronization of remote collections.
+  --
+  -- Note: that option must be the same for all nodes.
+, _syncOptionsCollectionsChannel :: ChannelID
   -- | Delays between messages for resolving a name of sync object
-, _syncOptionsResolveDelay    :: NominalDiffTime
+, _syncOptionsResolveDelay       :: NominalDiffTime
   -- | Options of next underlying module
-, _syncOptionsNext            :: s
+, _syncOptionsNext               :: s
 } deriving (Generic, Show)
 
 makeLenses ''SyncOptions
@@ -52,6 +57,7 @@ makeLenses ''SyncOptions
 -- SyncOptions {
 --   _syncOptionsRole = SyncSlave
 -- , _syncOptionsChannel = fromIntegral 1
+-- , _syncOptionsCollectionsChannel = fromIntegral 2
 -- , _syncOptionsResolveDelay = realToFrac (5 :: Double)
 -- , _syncOptionsNext = s
 -- }
@@ -60,6 +66,7 @@ defaultSyncOptions :: s -> SyncOptions s
 defaultSyncOptions s = SyncOptions {
     _syncOptionsRole = SyncSlave
   , _syncOptionsChannel = fromIntegral (1 :: Int)
+  , _syncOptionsCollectionsChannel = fromIntegral (2 :: Int)
   , _syncOptionsResolveDelay = realToFrac (5 :: Double)
   , _syncOptionsNext = s
   }

@@ -24,6 +24,9 @@ module Game.GoreAndAsh.Sync(
   , SyncRole(..)
   , SyncOptions
   , syncOptionsRole
+  , syncOptionsChannel
+  , syncOptionsCollectionsChannel
+  , syncOptionsResolveDelay
   , syncOptionsNext
   , defaultSyncOptions
   -- * API
