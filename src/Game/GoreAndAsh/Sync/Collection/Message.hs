@@ -9,6 +9,9 @@ Portability : POSIX
 -}
 module Game.GoreAndAsh.Sync.Collection.Message(
     RemoteCollectionMsg(..)
+  , encodeComponentCreateMsg
+  , encodeComponentDeleteMsg
+  , encodeComponentsRequestMsg
   , sendComponentCreateMsg
   , sendComponentDeleteMsg
   , sendComponentsRequestMsg

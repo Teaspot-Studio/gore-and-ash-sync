@@ -61,9 +61,11 @@ library
     FunctionalDependencies
     GADTs
     GeneralizedNewtypeDeriving
+    LambdaCase
     MultiParamTypeClasses
     OverloadedStrings
     RecordWildCards
+    RecursiveDo
     ScopedTypeVariables
     StandaloneDeriving
     TupleSections
