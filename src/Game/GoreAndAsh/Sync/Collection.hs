@@ -13,6 +13,7 @@ module Game.GoreAndAsh.Sync.Collection(
   ) where
 
 import Control.Lens
+import Control.Monad (join)
 import Data.Bifunctor
 import Data.Map (Map)
 import Data.Monoid
@@ -27,6 +28,7 @@ import Game.GoreAndAsh.Logging
 import Game.GoreAndAsh.Network
 import Game.GoreAndAsh.Sync.API
 import Game.GoreAndAsh.Sync.Collection.Message
+import Game.GoreAndAsh.Sync.Message
 import Game.GoreAndAsh.Sync.Options
 
 -- | Make collection that infroms clients about component creation/removing
@@ -75,18 +77,35 @@ hostCollection itemId peersDyn initialMap addDelMap toClientVal makeComponent = 
         let makeMsg peer k Nothing  = (peer, chan, encodeComponentDeleteMsg i itemId k)
             makeMsg peer k (Just v) = (peer, chan, encodeComponentCreateMsg i itemId k $ toClientVal peer v)
         return $ flip F.foldMap peers $ \peer -> M.elems $ M.mapWithKey (makeMsg peer) m
-  msgSendMany updMsgsE
+  _ <- msgSendMany updMsgsE
   -- local collection
   holdKeyCollection initialMap addDelMap makeComponent
 
 -- | Make a client-side version of 'hostCollection' receive messages when
 -- server adds-removes components and mirror them localy by local component.
-remoteCollection :: (Ord k, MonadAppHost t m, NetworkClient t m)
+remoteCollection :: (Ord k, Store k, Store v, MonadAppHost t m, NetworkClient t m, SyncMonad t m)
   => SyncItemId -- ^ ID of collection in current scope
   -> (k -> v -> m a) -- ^ Contructor of client widget
   -> m (Dynamic t (Map k a))
-remoteCollection itemId makeComponent = do
-  holdKeyCollection mempty never makeComponent
+remoteCollection itemId makeComponent = fmap join $ whenConnected (pure mempty) $ \server -> do
+  -- read options
+  opts <- syncOptions
+  let chan = opts ^. syncOptionsChannel
+  -- resolve scope
+  name <- syncCurrentName
+  fmap join $ resolveSyncName name (pure mempty) $ \i -> do
+    -- at creation send request to server for full list of items
+    buildE <- getPostBuild
+    let reqMsgE = const (encodeComponentsRequestMsg i itemId) <$> buildE
+    _ <- peerChanSend server chan reqMsgE
+    -- listen to server messages
+    msgE <- listenPeerCollectionMsg server chan i itemId
+    let updMapE = fforMaybe msgE $ \msg -> case msg of
+          RemoteComponentCreate{..} -> Just $ M.singleton remoteComponentKey (Just remoteComponentValue)
+          RemoteComponentDelete{..} -> Just $ M.singleton remoteComponentKey Nothing
+          _ -> Nothing
+    -- listen incoming
+    holdKeyCollection mempty updMapE makeComponent
 
 -- | Listen for collection message
 listenCollectionMsg :: (NetworkMonad t m, LoggingMonad t m, Store k, Store v)
@@ -99,3 +118,19 @@ listenCollectionMsg chan = do
         else Nothing
       printDecodeError de = "Failed to decode remote collection msg: " <> showl de
   logEitherWarn $ first printDecodeError <$> e'
+
+-- | Listen for collection messages from particular peer
+listenPeerCollectionMsg :: (NetworkMonad t m, LoggingMonad t m, Store k, Store v)
+  => Peer -- ^ Peer that is listened
+  -> ChannelID -- ^ Channel that is used for collection messages
+  -> SyncId -- ^ ID of scoped
+  -> SyncItemId -- ^ ID of sync object
+  -> m (Event t (RemoteCollectionMsg k v))
+listenPeerCollectionMsg peer chan i itemId = do
+  msgE <- listenCollectionMsg chan
+  return $ fforMaybe msgE $ \(peer', msg) -> if
+       peer == peer'
+    && remoteComponentSyncId msg == i
+    && remoteComponentItemId msg == itemId
+    then Just msg
+    else Nothing

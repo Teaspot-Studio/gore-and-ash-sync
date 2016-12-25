@@ -36,6 +36,7 @@ module Game.GoreAndAsh.Sync.API(
   , NameMap
   , syncService
   , makeSyncName
+  , resolveSyncName
   ) where
 
 import Control.Lens ((^.))
