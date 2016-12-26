@@ -9,6 +9,7 @@ Portability : POSIX
 -}
 module Game.GoreAndAsh.Sync.Collection(
     hostCollection
+  , hostSimpleCollection
   , remoteCollection
   ) where
 
@@ -80,6 +81,22 @@ hostCollection itemId peersDyn initialMap addDelMap toClientVal makeComponent = 
   _ <- msgSendMany updMsgsE
   -- local collection
   holdKeyCollection initialMap addDelMap makeComponent
+
+-- | Make collection that infroms clients about component creation/removing
+--
+-- Simplified version of 'hostCollection' which doesn't provide control
+-- over peers and start value projection for clients.
+hostSimpleCollection :: forall k v a t m .
+    ( Ord k, Store k, Store v, MonadAppHost t m
+    , NetworkServer t m, SyncMonad t m)
+  => SyncItemId -- ^ ID of collection in current scope
+  -> Map k v -- ^ Initial set of components
+  -> Event t (Map k (Maybe v)) -- ^ Nothing entries delete component, Just ones create or replace
+  -> (k -> v -> m a) -- ^ Constructor of widget
+  -> m (Dynamic t (Map k a)) -- ^ Collected output of components
+hostSimpleCollection itemId initialMap updatesE makeComponent = do
+  peers <- networkPeers
+  hostCollection itemId peers initialMap updatesE (const id) makeComponent
 
 -- | Make a client-side version of 'hostCollection' receive messages when
 -- server adds-removes components and mirror them localy by local component.
