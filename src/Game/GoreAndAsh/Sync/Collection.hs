@@ -121,7 +121,7 @@ remoteCollection itemId makeComponent = fmap join $ whenConnected (pure mempty) 
           RemoteComponentCreate{..} -> Just $ M.singleton remoteComponentKey (Just remoteComponentValue)
           RemoteComponentDelete{..} -> Just $ M.singleton remoteComponentKey Nothing
           _ -> Nothing
-    -- listen incoming
+    -- local collection
     holdKeyCollection mempty updMapE makeComponent
 
 -- | Listen for collection message
