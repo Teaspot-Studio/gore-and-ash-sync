@@ -45,7 +45,7 @@ hostCollection :: forall k v v' a t m .
   -> m (Dynamic t (Map k a)) -- ^ Collected output of components
 hostCollection itemId peersDyn initialMap addDelMap toClientVal makeComponent = do
   opts <- syncOptions
-  let chan = opts ^. syncOptionsChannel
+  let chan = opts ^. syncOptionsCollectionsChannel
   -- resolve scope name
   i <- makeSyncName =<< syncCurrentName
   -- collect contents of (key, start value) to send to remote peer with request
@@ -107,7 +107,7 @@ remoteCollection :: (Ord k, Store k, Store v, MonadAppHost t m, NetworkClient t 
 remoteCollection itemId makeComponent = fmap join $ whenConnected (pure mempty) $ \server -> do
   -- read options
   opts <- syncOptions
-  let chan = opts ^. syncOptionsChannel
+  let chan = opts ^. syncOptionsCollectionsChannel
   -- resolve scope
   name <- syncCurrentName
   fmap join $ resolveSyncName name (pure mempty) $ \i -> do

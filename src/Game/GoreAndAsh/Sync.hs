@@ -52,8 +52,13 @@ module Game.GoreAndAsh.Sync(
   , predictMaybe
   , predictM
   , predictMaybeM
+  -- * Collections
+  , hostCollection
+  , hostSimpleCollection
+  , remoteCollection
   ) where
 
 import Game.GoreAndAsh.Sync.API as X
+import Game.GoreAndAsh.Sync.Collection as X
 import Game.GoreAndAsh.Sync.Module as X
 import Game.GoreAndAsh.Sync.Options as X
