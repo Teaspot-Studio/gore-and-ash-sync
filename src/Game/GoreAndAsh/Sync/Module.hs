@@ -20,7 +20,6 @@ import Control.Monad.Reader
 import Control.Monad.Trans.Control
 import Control.Monad.Trans.Resource
 import Data.IORef
-import Data.Monoid
 import Data.Proxy
 import Game.GoreAndAsh
 import Game.GoreAndAsh.Logging
@@ -140,7 +139,7 @@ instance (MonadAppHost t m, MonadMask m, TimerMonad t m, LoggingMonad t m) => Sy
   {-# INLINE syncCurrentName #-}
   syncUnsafeSetName name = do
     ref <- asks syncEnvName
-    liftIO . atomicModifyIORef' ref $ \oldName -> (oldName <> name, ())
+    liftIO $ writeIORef ref name
   {-# INLINE syncUnsafeSetName #-}
   syncUnsafeRegId name = do
     namesRef <- asks syncEnvNames

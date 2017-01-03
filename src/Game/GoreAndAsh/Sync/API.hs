@@ -92,7 +92,7 @@ syncWithName name = bracket setName syncUnsafeSetName . const
   where
   setName = do
     oldName <- syncCurrentName
-    syncUnsafeSetName name
+    syncUnsafeSetName (oldName <> name)
     return oldName
 
 instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), MonadMask (mt m), MonadTrans mt, SyncMonad t m, TimerMonad t m, LoggingMonad t m)
