@@ -24,6 +24,9 @@ module Game.GoreAndAsh.Sync.API(
   , sendToClient
   , sendToClients
   , sendToAllClients
+  , sendToClientMany
+  , sendToClientsMany
+  , sendToAllClientsMany
   , syncFromClient
   , syncFromClients
   , syncFromAllClients
@@ -34,6 +37,7 @@ module Game.GoreAndAsh.Sync.API(
   , syncToServer
   , syncFromServer
   , sendToServer
+  , sendToServerMany
   , receiveFromServer
   -- ** Prediction
   , predict
@@ -264,6 +268,75 @@ sendToAllClients :: (SyncMonad t m, NetworkServer t m, Store a)
 sendToAllClients itemId mt ea = do
   peers <- networkPeers
   sendToClients peers  itemId mt ea
+
+-- | Send given high-level message to given peer.
+--
+-- Intended to be called on server side and a corresponding 'receiveFromServer'
+-- call is needed on client side.
+--
+-- You can group 'sendToClient' calls within a single set of peers (see 'networkPeers')
+-- as it more efficient than calling 'syncToAllClients' for each dynamic for the
+-- same set of peers.
+sendToClientMany :: (SyncMonad t m, NetworkServer t m, Store a, Foldable f, Functor f)
+  -- | Unique name of synchronization value withing current scope
+  => SyncItemId
+  -- | Underlying message type for sending, you can set unrelable delivery if
+  -- the data rapidly changes.
+  -> MessageType
+  -- | Each time the event fires the content in sended to remote peer.
+  -> Event t (f a)
+  -- | Client that is target of synchronisation.
+  -> Peer
+  -- | Returns event that fires when a value was synced to given peers
+  -> m (Event t ())
+sendToClientMany itemId mt eas peer = do
+  opts <- syncOptions
+  let chan = opts ^. syncOptionsChannel
+  i <- makeSyncName =<< syncCurrentName
+  -- send updates
+  let msgsE = fmap (encodeSyncMessage mt i itemId) <$> eas
+  peerChanSendMany peer chan msgsE
+
+
+-- | Send given high-level message to given peers.
+--
+-- Intended to be called on server side and a corresponding 'receiveFromServer'
+-- call is needed on client side.
+--
+-- You can group 'sendToClients' calls within a single set of peers (see 'networkPeers')
+-- as it more efficient than calling 'syncToAllClients' for each dynamic for the
+-- same set of peers.
+sendToClientsMany :: (SyncMonad t m, NetworkServer t m, Store a, Foldable f1, Foldable f2, Functor f2)
+  -- | Collection of peers to sync the message to
+  => Dynamic t (f1 Peer)
+  -- | Unique name of synchronization value withing current scope
+  -> SyncItemId
+  -- | Underlying message type for sending, you can set unrelable delivery if
+  -- the data rapidly changes.
+  -> MessageType
+  -- | Each time the event fires the content in sended to remote peer.
+  -> Event t (f2 a)
+  -- | Returns event that fires when a value was synced to given peers
+  -> m (Event t ())
+sendToClientsMany peers itemId mt eas = dynAppHost $ mapM_ (sendToClientMany itemId mt eas) <$> peers
+
+-- | Send given high-level message to all connected peers.
+--
+-- Intended to be called on server side and a corresponding 'receiveFromServer'
+-- call is needed on client side.
+sendToAllClientsMany :: (SyncMonad t m, NetworkServer t m, Store a, Foldable f, Functor f)
+  -- | Unique name of synchronization value withing current scope
+  => SyncItemId
+  -- | Underlying message type for sending, you can set unrelable delivery if
+  -- the data rapidly changes.
+  -> MessageType
+  -- | Each time the event fires the content in sended to remote peer.
+  -> Event t (f a)
+  -- | Returns event that fires when a value was synced to given peers
+  -> m (Event t ())
+sendToAllClientsMany itemId mt eas = do
+  peers <- networkPeers
+  sendToClientsMany peers itemId mt eas
 
 -- | Synchronisation from client to server. Server can reject values and send actuall value.
 --
@@ -595,9 +668,7 @@ sendToServer :: (SyncMonad t m, NetworkClient t m, Store a)
   -- | Underlying message type for sending, you can set unrelable delivery if
   -- the data rapidly changes.
   -> MessageType
-  -- | Source of data to transfer to server. Note that updates to server
-  -- are sent each time the dynamic fires event the current value of
-  -- internal behavior isn't changed.
+  -- | Source of data to transfer to server.
   -> Event t a
   -- | Event that fires each time a new message is passed to server
   -> m (Event t ())
@@ -609,6 +680,28 @@ sendToServer itemId mt ea = do
     fmap switchPromptlyDyn $ resolveSyncName name (pure never) $ \i -> do -- wait for id
       let msgE = encodeSyncMessage mt i itemId <$> ea
       peerChanSend peer chan msgE
+
+-- | Synchronisation from client to server. Server can reject values and send actual state.
+--
+-- Server has to call corresponding 'syncFromClients' function to receive updates.
+sendToServerMany :: (SyncMonad t m, NetworkClient t m, Store a, Foldable f, Functor f)
+  -- | Unique name of synchronization value withing current scope
+  => SyncItemId
+  -- | Underlying message type for sending, you can set unrelable delivery if
+  -- the data rapidly changes.
+  -> MessageType
+  -- | Source of data to transfer to server.
+  -> Event t (f a)
+  -- | Event that fires each time a new message is passed to server
+  -> m (Event t ())
+sendToServerMany itemId mt eas = do
+  opts <- syncOptions
+  let chan = opts ^. syncOptionsChannel
+  name <- syncCurrentName
+  fmap switchPromptlyDyn $ whenConnected (pure never) $ \peer -> do -- first wait until connected
+    fmap switchPromptlyDyn $ resolveSyncName name (pure never) $ \i -> do -- wait for id
+      let msgsE = fmap (encodeSyncMessage mt i itemId) <$> eas
+      peerChanSendMany peer chan msgsE
 
 -- | Helper that fires when a synchronization message in interest arrives
 syncMessage :: (SyncMonad t m, NetworkMonad t m)
