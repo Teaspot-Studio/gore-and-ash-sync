@@ -10,6 +10,7 @@
 module Main where
 
 import Control.Lens
+import Control.Monad
 import Control.Monad.IO.Class
 import Data.Monoid
 import Game.GoreAndAsh
@@ -38,7 +39,7 @@ channelCount = 2
 
 -- Server application.
 -- The application should be generic in the host monad that is used
-appServer :: forall t m . (LoggingMonad t m, NetworkServer t m, SyncMonad t m)
+appServer :: forall t m . (LoggingMonad t m, NetworkClient t m, NetworkServer t m, SyncMonad t m)
   => PortNumber -> m ()
 appServer p = do
   e <- getPostBuild
@@ -67,7 +68,7 @@ appServer p = do
   makeSharedCounters n = mapM makeSharedCounter [0 .. n-1]
 
   makeSharedCounter :: Int -> m (Dynamic t Int)
-  makeSharedCounter i = syncWithName ("counter" <> show i) $ do
+  makeSharedCounter i = fmap join $ syncWithName ("counter" <> show i) (pure 0) $ do
     ref <- newExternalRef (0 :: Int)
     tickE <- tickEvery (fromIntegral $ i + 1)
     performEvent_ $ ffor tickE $ const $ modifyExternalRef ref $ \n -> (n+1, ())
@@ -94,7 +95,7 @@ clientLogic = do
   makeSharedCounters n = mapM makeSharedCounter [0 .. n-1]
 
   makeSharedCounter :: Int -> m (Dynamic t Int)
-  makeSharedCounter i = syncWithName ("counter" <> show i) $ syncFromServer counterId 0
+  makeSharedCounter i = fmap join $ syncWithName ("counter" <> show i) (pure 0) $ syncFromServer counterId 0
 
 -- Client application.
 -- The application should be generic in the host monad that is used

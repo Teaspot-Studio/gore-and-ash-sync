@@ -110,7 +110,7 @@ remoteCollection itemId makeComponent = fmap join $ whenConnected (pure mempty) 
   let chan = opts ^. syncOptionsCollectionsChannel
   -- resolve scope
   name <- syncCurrentName
-  fmap join $ resolveSyncName name (pure mempty) $ \i -> do
+  fmap join $ resolveSyncName server name (pure mempty) $ \i -> do
     -- at creation send request to server for full list of items
     buildE <- getPostBuild
     let reqMsgE = const (encodeComponentsRequestMsg i itemId) <$> buildE

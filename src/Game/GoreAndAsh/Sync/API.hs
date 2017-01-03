@@ -101,13 +101,25 @@ class (MonadAppHost t m, TimerMonad t m, LoggingMonad t m, MonadMask m)
     syncUnsafeAddId :: SyncName -> SyncId -> m ()
 
 -- | Execute nested action with given scope name and restore it after
-syncWithName :: SyncMonad t m => SyncName -> m a -> m a
-syncWithName name = bracket setName syncUnsafeSetName . const
+syncWithName :: (SyncMonad t m, NetworkClient t m) => SyncName -- ^ Name to use for scope
+  -> a   -- ^ Initial value (before the name is resolved)
+  -> m a -- ^ Scope
+  -> m (Dynamic t a) -- ^ Result of scope execution
+syncWithName name a0 m = bracket setName syncUnsafeSetName $ const presolve
   where
   setName = do
     oldName <- syncCurrentName
     syncUnsafeSetName (oldName <> name)
     return oldName
+  presolve = do
+    name' <- syncCurrentName
+    opts <- syncOptions
+    let role = opts ^. syncOptionsRole
+    case role of
+      SyncSlave ->
+        fmap join $ whenConnected (return $ pure a0) $ \peer ->
+          resolveSyncName peer name' (return a0) (const m)
+      SyncMaster -> makeSyncName name' >> fmap pure m
 
 instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), MonadMask (mt m), MonadTrans mt, SyncMonad t m, TimerMonad t m, LoggingMonad t m)
   => SyncMonad t (mt m) where
@@ -154,6 +166,7 @@ syncToClient itemId mt da peer = do
   -- listen for requests
   reqE <- syncRequestMessage peer i itemId
   let respE = tagPromptlyDyn da reqE
+  logVerboseE $ ffor respE $ const $ "Sync: Got request for initial value of " <> showl itemId
   -- send updates
   let initialE = tagPromptlyDyn da buildE
       updatedE = leftmost [updated da, respE, initialE]
@@ -585,10 +598,11 @@ syncFromServer itemId initVal = do
   let pureInitVal = return $ pure initVal
   name <- syncCurrentName
   fmap join $ whenConnected pureInitVal $ \peer -> do -- first wait until connected
-    fmap join $ resolveSyncName name pureInitVal $ \i -> do -- wait for id
+    fmap join $ resolveSyncName peer name pureInitVal $ \i -> do -- wait for id
       -- send initial request to inform client of initial value for rarely changing values
       buildE <- getPostBuild
       let reqE = const (encodeSyncRequest ReliableMessage i itemId) <$> buildE
+      logVerboseE $ ffor buildE $ const $ "Sync: Sending request for initial value of " <> showl itemId
       _ <- peerChanSend peer chan reqE
       -- listen for responds of server
       msgE <- syncPeerMessage peer i itemId
@@ -603,7 +617,7 @@ receiveFromServer :: (SyncMonad t m, NetworkClient t m, Store a)
 receiveFromServer itemId = do
   name <- syncCurrentName
   fmap switchPromptlyDyn $ whenConnected (pure never) $ \peer -> do -- first wait until connected
-    fmap switchPromptlyDyn $ resolveSyncName name (pure never) $ \i -> do -- wait for id
+    fmap switchPromptlyDyn $ resolveSyncName peer name (pure never) $ \i -> do -- wait for id
       -- listen for responds of server
       syncPeerMessage peer i itemId
 
@@ -643,7 +657,7 @@ syncToServer itemId mt da = do
   let chan = opts ^. syncOptionsChannel
   name <- syncCurrentName
   dynEv <- whenConnected (pure never) $ \peer -> do -- first wait until connected
-    dynEv <- resolveSyncName name (pure never) $ \i -> do -- wait for id
+    dynEv <- resolveSyncName peer name (pure never) $ \i -> do -- wait for id
       -- we need to send initial request to inform client of initial value for rarely changing values
       buildE <- getPostBuild
       let initialE = encodeSyncMessage mt i itemId <$> tagPromptlyDyn da buildE
@@ -677,7 +691,7 @@ sendToServer itemId mt ea = do
   let chan = opts ^. syncOptionsChannel
   name <- syncCurrentName
   fmap switchPromptlyDyn $ whenConnected (pure never) $ \peer -> do -- first wait until connected
-    fmap switchPromptlyDyn $ resolveSyncName name (pure never) $ \i -> do -- wait for id
+    fmap switchPromptlyDyn $ resolveSyncName peer name (pure never) $ \i -> do -- wait for id
       let msgE = encodeSyncMessage mt i itemId <$> ea
       peerChanSend peer chan msgE
 
@@ -699,7 +713,7 @@ sendToServerMany itemId mt eas = do
   let chan = opts ^. syncOptionsChannel
   name <- syncCurrentName
   fmap switchPromptlyDyn $ whenConnected (pure never) $ \peer -> do -- first wait until connected
-    fmap switchPromptlyDyn $ resolveSyncName name (pure never) $ \i -> do -- wait for id
+    fmap switchPromptlyDyn $ resolveSyncName peer name (pure never) $ \i -> do -- wait for id
       let msgsE = fmap (encodeSyncMessage mt i itemId) <$> eas
       peerChanSendMany peer chan msgsE
 
@@ -770,12 +784,13 @@ makeSyncName name = do
 
 -- | Helper that tries to get an id for given sync name and then switch into
 -- given handler.
-resolveSyncName :: forall t m a . (SyncMonad t m, NetworkClient t m)
-  => SyncName -- ^ Name to resolve
+resolveSyncName :: forall t m a . (SyncMonad t m, NetworkMonad t m)
+  => Peer -- ^ Where to ask the name id
+  -> SyncName -- ^ Name to resolve
   -> m a -- ^ Initial value
   -> (SyncId -> m a) -- ^ Next component to switch in when id of the name is acquired
   -> m (Dynamic t a) -- ^ Fired when the function finally resolve the name
-resolveSyncName name im m = do
+resolveSyncName peer name im m = do
   namesDyn <- syncKnownNames
   startNames <- sample . current $ namesDyn
   case H.lookup name startNames of
@@ -789,49 +804,16 @@ resolveSyncName name im m = do
       tickE <- tickEveryUntil (opts ^. syncOptionsResolveDelay) resolvedE
       let chan = opts ^. syncOptionsChannel
           requestE = leftmost [tickE, buildE]
-      _ <- requestSyncId chan $ const name <$> requestE
+      _ <- requestSyncId peer chan $ const name <$> requestE
       holdAppHost im $ fmap m resolvedE
-
-
--- resolveSyncName name im m = do
---   namesDyn <- syncKnownNames
---   startNames <- sample . current $ namesDyn
---   case H.lookup name startNames of
---     Just i -> cachedName i
---     Nothing -> join <$> chain (resolveStep namesDyn)
---   where
---     cachedName :: SyncId -> m (Dynamic t a)
---     cachedName i = do
---       a <- m i
---       return $ pure a
-
---     resolveStep :: Dynamic t NameMap -> m (Dynamic t a, Chain t m (Dynamic t a))
---     resolveStep namesDyn = do
---       opts <- syncOptions
---       buildE <- getPostBuild
---       let resolvedE = fforMaybe (updated namesDyn) $ H.lookup name
---       tickE <- tickEveryUntil (opts ^. syncOptionsResolveDelay) resolvedE
---       let chan = opts ^. syncOptionsChannel
---           requestE = leftmost [tickE, buildE]
---       _ <- requestSyncId chan $ const name <$> requestE
---       initVal <- im
---       return (pure initVal, Chain $ fmap calcStep resolvedE)
-
---     calcStep :: SyncId -> m (Dynamic t a, Chain t m (Dynamic t a))
---     calcStep i = do
---       a <- m i
---       return (pure a, Chain never)
 
 -- | Helper that sends message to server with request to send back id of given
 -- sync object.
 --
 -- Return event that fires when the request message is sent.
-requestSyncId :: (LoggingMonad t m, NetworkClient t m)
-  => ChannelID -> Event t SyncName -> m (Event t ())
-requestSyncId chan ename = do
-  dynSent <- whenConnected (pure never) $ \server ->
-    peerChanSend server chan $ fmap mkMessage ename
-  return $ switchPromptlyDyn dynSent
+requestSyncId :: (LoggingMonad t m, NetworkMonad t m)
+  => Peer -> ChannelID -> Event t SyncName -> m (Event t ())
+requestSyncId peer chan ename = peerChanSend peer chan $ fmap mkMessage ename
   where
     mkMessage = encodeSyncServiceMsg ReliableMessage . ServiceAskId
 
