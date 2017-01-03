@@ -41,12 +41,24 @@ module Game.GoreAndAsh.Sync(
   , syncToClient
   , syncToClients
   , syncToAllClients
+  , sendToClient
+  , sendToClients
+  , sendToAllClients
+  , sendToClientMany
+  , sendToClientsMany
+  , sendToAllClientsMany
   , syncFromClient
   , syncFromClients
   , syncFromAllClients
+  , receiveFromClient
+  , receiveFromClients
+  , receiveFromAllClients
   -- ** Client side
   , syncToServer
   , syncFromServer
+  , sendToServer
+  , sendToServerMany
+  , receiveFromServer
   -- ** Prediction
   , predict
   , predictMaybe
