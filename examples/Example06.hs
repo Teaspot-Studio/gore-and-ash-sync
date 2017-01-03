@@ -36,7 +36,7 @@ collectionId = 0
 
 -- | Number of dynamic counters that is created initially both on client and server
 countersCount :: Int
-countersCount = 5
+countersCount = 0
 
 -- | Map that holds id of counter and it initial value
 type CounterMap = Map Int Int
@@ -66,8 +66,7 @@ serverLogic = do
   makeSharedCounter :: Int -> Int -> m (Dynamic t Int)
   makeSharedCounter i v0 = do
     ref <- newExternalRef v0
-    --tickE <- tickEvery (fromIntegral $ i + 1)
-    tickE <- tickEvery (fromIntegral (1 :: Int))
+    tickE <- tickEvery (fromIntegral $ i + 1)
     performEvent_ $ ffor tickE $ const $ modifyExternalRef ref $ \n -> (n+1, ())
     dynCnt <- externalRefDynamic ref
     _ <- syncToAllClients (fromIntegral i) UnreliableMessage dynCnt

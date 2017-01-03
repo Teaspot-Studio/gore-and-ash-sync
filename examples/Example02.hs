@@ -32,6 +32,10 @@ counterId = 0
 countersCount :: Int
 countersCount = 5
 
+-- | Number of network channels, the second channel is used
+channelCount :: Word
+channelCount = 2
+
 -- Server application.
 -- The application should be generic in the host monad that is used
 appServer :: forall t m . (LoggingMonad t m, NetworkServer t m, SyncMonad t m)
@@ -42,7 +46,7 @@ appServer p = do
   listenE <- dontCare =<< (serverListen $ ffor e $ const $ ServerListen {
       listenAddress = SockAddrInet p 0
     , listenMaxConns = 100
-    , listenChanns = 2
+    , listenChanns = channelCount
     , listenIncoming = 0
     , listenOutcoming = 0
     })
@@ -100,7 +104,7 @@ appClient host serv = do
   e <- getPostBuild
   connectedE <- dontCare =<< (clientConnect $ ffor e $ const $ ClientConnect {
       clientAddrr = addr
-    , clientChanns = 2
+    , clientChanns = channelCount
     , clientIncoming = 0
     , clientOutcoming = 0
     })

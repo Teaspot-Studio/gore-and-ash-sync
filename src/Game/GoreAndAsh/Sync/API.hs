@@ -133,6 +133,7 @@ syncToClient :: (SyncMonad t m, NetworkServer t m, Store a)
   -- | Returns event that fires when a value was synced to given peers
   -> m (Event t ())
 syncToClient itemId mt da peer = do
+  buildE <- getPostBuild
   opts <- syncOptions
   let chan = opts ^. syncOptionsChannel
   i <- makeSyncName =<< syncCurrentName
@@ -140,7 +141,6 @@ syncToClient itemId mt da peer = do
   reqE <- syncRequestMessage peer i itemId
   let respE = tagPromptlyDyn da reqE
   -- send updates
-  buildE <- getPostBuild
   let initialE = tagPromptlyDyn da buildE
       updatedE = leftmost [updated da, respE, initialE]
       msgE = fmap (encodeSyncMessage mt i itemId) updatedE
@@ -150,12 +150,9 @@ syncToClient itemId mt da peer = do
 --
 -- Intended to be called on server side and a corresponding 'syncFromServer'
 -- call is needed on client side.
-syncToClients :: (SyncMonad t m, NetworkServer t m, Store a)
-  -- | Fires when user wants to add/remove peers from set of receives of the value
-  => Event t (M.Map Peer PeerAction)
-  -- | Filter peers that is connected at the first time. Return 'False' at
-  -- connected peer will not be placed in the
-  -> (Peer -> PushM t Bool)
+syncToClients :: (SyncMonad t m, NetworkServer t m, Store a, Foldable f)
+  -- | Set of clients that should be informed about chages of the value
+  => Dynamic t (f Peer)
   -- | Unique name of synchronization value withing current scope
   -> SyncItemId
   -- | Underlying message type for sending, you can set unrelable delivery if
@@ -166,11 +163,8 @@ syncToClients :: (SyncMonad t m, NetworkServer t m, Store a)
   -- internal behavior isn't changed.
   -> Dynamic t a
   -- | Returns event that fires when a value was synced to given peers
-  -> m (Event t [Peer])
-syncToClients peerManual checkPeer itemId mt da = do
-  dynSended <- peersCollection peerManual checkPeer $
-    syncToClient itemId mt da
-  pure . switchPromptlyDyn $ fmap (fmap M.keys . mergeMap) dynSended
+  -> m (Event t ())
+syncToClients peers itemId mt da = dynAppHost $ mapM_ (syncToClient itemId mt da) <$> peers
 
 -- | Start streaming given dynamic value to all connected clients.
 --
@@ -187,8 +181,10 @@ syncToAllClients :: (SyncMonad t m, NetworkServer t m, Store a)
   -- internal behavior isn't changed.
   -> Dynamic t a
   -- | Returns event that fires when a value was synced to given peers
-  -> m (Event t [Peer])
-syncToAllClients = syncToClients never (const $ pure True)
+  -> m (Event t ())
+syncToAllClients itemId mt da = do
+  peers <- networkPeers
+  syncToClients peers itemId mt da
 
 -- | Synchronisation from client to server. Server can reject values and send actuall value.
 --
@@ -508,16 +504,10 @@ resolveSyncName name im m = do
   namesDyn <- syncKnownNames
   startNames <- sample . current $ namesDyn
   case H.lookup name startNames of
-    Just i -> cachedName i
-    Nothing -> join <$> chain (resolveStep namesDyn)
-  where
-    cachedName :: SyncId -> m (Dynamic t a)
-    cachedName i = do
+    Just i -> do
       a <- m i
       return $ pure a
-
-    resolveStep :: Dynamic t NameMap -> m (Dynamic t a, Chain t m (Dynamic t a))
-    resolveStep namesDyn = do
+    Nothing -> do
       opts <- syncOptions
       buildE <- getPostBuild
       let resolvedE = fforMaybe (updated namesDyn) $ H.lookup name
@@ -525,13 +515,37 @@ resolveSyncName name im m = do
       let chan = opts ^. syncOptionsChannel
           requestE = leftmost [tickE, buildE]
       _ <- requestSyncId chan $ const name <$> requestE
-      initVal <- im
-      return (pure initVal, Chain $ fmap calcStep resolvedE)
+      holdAppHost im $ fmap m resolvedE
 
-    calcStep :: SyncId -> m (Dynamic t a, Chain t m (Dynamic t a))
-    calcStep i = do
-      a <- m i
-      return (pure a, Chain never)
+
+-- resolveSyncName name im m = do
+--   namesDyn <- syncKnownNames
+--   startNames <- sample . current $ namesDyn
+--   case H.lookup name startNames of
+--     Just i -> cachedName i
+--     Nothing -> join <$> chain (resolveStep namesDyn)
+--   where
+--     cachedName :: SyncId -> m (Dynamic t a)
+--     cachedName i = do
+--       a <- m i
+--       return $ pure a
+
+--     resolveStep :: Dynamic t NameMap -> m (Dynamic t a, Chain t m (Dynamic t a))
+--     resolveStep namesDyn = do
+--       opts <- syncOptions
+--       buildE <- getPostBuild
+--       let resolvedE = fforMaybe (updated namesDyn) $ H.lookup name
+--       tickE <- tickEveryUntil (opts ^. syncOptionsResolveDelay) resolvedE
+--       let chan = opts ^. syncOptionsChannel
+--           requestE = leftmost [tickE, buildE]
+--       _ <- requestSyncId chan $ const name <$> requestE
+--       initVal <- im
+--       return (pure initVal, Chain $ fmap calcStep resolvedE)
+
+--     calcStep :: SyncId -> m (Dynamic t a, Chain t m (Dynamic t a))
+--     calcStep i = do
+--       a <- m i
+--       return (pure a, Chain never)
 
 -- | Helper that sends message to server with request to send back id of given
 -- sync object.
