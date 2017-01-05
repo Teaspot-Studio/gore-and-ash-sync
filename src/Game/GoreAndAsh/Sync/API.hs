@@ -369,8 +369,9 @@ syncFromClient :: (SyncMonad t m, NetworkServer t m, Store a)
   -> (a -> PushM t (Maybe a))
   -- | Peer that is listened for values.
   -> Peer
-  -- | Collected state for each Peer.
-  -> m (Dynamic t a)
+  -- | Dynamic with respect to rejects and event that fires with old and new value
+  -- when server rejects client side value.
+  -> m (Dynamic t a, Event t (a, a))
 syncFromClient itemId mkInit predicate peer = do
   opts <- syncOptions
   let chan = opts ^. syncOptionsChannel
@@ -378,12 +379,14 @@ syncFromClient itemId mkInit predicate peer = do
   -- listen for state
   msgE <- syncPeerMessage peer i itemId
   -- check whether we want to reject value
-  let rejectE = push predicate msgE
+  let rejectsE = flip push msgE $ \v -> fmap (v, ) <$> predicate v
+      rejectE = snd <$> rejectsE
       rejectMsgE = encodeSyncMessage ReliableMessage i itemId <$> rejectE
   _ <- peerChanSend peer chan rejectMsgE
   -- collect state on server side
   initVal <- mkInit
-  holdDyn initVal $ leftmost [rejectE, msgE]
+  updatedDyn <- holdDyn initVal $ leftmost [rejectE, msgE]
+  return (updatedDyn, rejectsE)
 
 -- | Synchronisation from clients to server. Server can reject values and send actuall value.
 --
@@ -398,20 +401,26 @@ syncFromClients :: forall t m a f . (SyncMonad t m, NetworkServer t m, Store a, 
   -- | Function that checks state from client is actually valid, if the predicate
   -- returns 'Just', server will send actual local state to client.
   -> (Peer -> a -> PushM t (Maybe a))
-  -- | Collected state for each Peer.
-  -> m (Dynamic t (Map Peer a))
+  -- | Collected state for each Peer with respect of rejections. The second event
+  -- contains info which values were rejected and which values replaced them.
+  --
+  -- Note: see 'syncFromClient' result type.
+  -> m (Dynamic t (Map Peer a), Event t (Map Peer (a, a)))
 syncFromClients peersDyn itemId mkInit predicate = do
-  switchedMap :: Event t (Dynamic t (Map Peer a)) <- dynAppHost $ go <$> peersDyn
-  join <$> holdDyn (pure mempty) switchedMap
+  switchedMap :: Event t (Dynamic t (Map Peer a), Event t (Map Peer (a, a))) <- dynAppHost $ go <$> peersDyn
+  dynPair <- holdDyn (pure mempty, never) switchedMap
+  return (join . fmap fst $ dynPair, switchPromptlyDyn . fmap snd $ dynPair)
   where
-    go :: f Peer -> m (Dynamic t (Map Peer a))
+    go :: f Peer -> m (Dynamic t (Map Peer a), Event t (Map Peer (a, a)))
     go peers = do
       es <- mapM goPeer $ F.toList peers
-      return $ sequence $ M.fromList es
-    goPeer :: Peer -> m (Peer, Dynamic t a)
+      let dmap = sequence $ M.fromList $ (\(a, b, _) -> (a, b)) <$> es
+      let emap = mergeMap $ M.fromList $ (\(a, _, c) -> (a, c)) <$> es
+      return (dmap, emap)
+    goPeer :: Peer -> m (Peer, Dynamic t a, Event t (a, a))
     goPeer peer = do
-      a <- syncFromClient itemId (mkInit peer) (predicate peer) peer
-      return (peer, a)
+      (da, ea) <- syncFromClient itemId (mkInit peer) (predicate peer) peer
+      return (peer, da, ea)
 
 -- | Synchronisation from client to server. Server can reject values and send actuall value.
 --
@@ -425,7 +434,7 @@ syncFromAllClients :: (SyncMonad t m, NetworkServer t m, Store a)
   -- returns 'Just', server will send actual local state to client.
   -> (Peer -> a -> PushM t (Maybe a))
   -- | Collected state for each Peer.
-  -> m (Dynamic t (M.Map Peer a))
+  -> m (Dynamic t (Map Peer a), Event t (Map Peer (a, a)))
 syncFromAllClients itemId initial predicate = do
   peers <- networkPeers
   syncFromClients peers itemId initial predicate
