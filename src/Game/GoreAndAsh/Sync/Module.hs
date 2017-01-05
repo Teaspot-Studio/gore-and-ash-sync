@@ -19,7 +19,6 @@ import Control.Monad.Except
 import Control.Monad.Reader
 import Control.Monad.Trans.Control
 import Control.Monad.Trans.Resource
-import Data.IORef
 import Data.Proxy
 import Game.GoreAndAsh
 import Game.GoreAndAsh.Logging
@@ -45,18 +44,17 @@ data SyncEnv t = SyncEnv {
   -- | Storage of name map and next free id
 , syncEnvNames :: ExternalRef t (NameMap, SyncId)
   -- | Current sync object
-, syncEnvName :: IORef SyncName
+, syncEnvName :: SyncName
 }
 
 -- | Creation of intial sync state
 newSyncEnv :: MonadAppHost t m => SyncOptions s -> m (SyncEnv t)
 newSyncEnv opts = do
   namesRef <- newExternalRef (H.singleton globalSyncName 0, 1)
-  nameRef <- liftIO $ newIORef globalSyncName
   return SyncEnv {
     syncEnvOptions = opts & syncOptionsNext .~ ()
   , syncEnvNames = namesRef
-  , syncEnvName = nameRef
+  , syncEnvName = globalSyncName
   }
 
 -- | Monad transformer of synchronization core module.
@@ -133,14 +131,12 @@ instance (MonadAppHost t m, MonadMask m, TimerMonad t m, LoggingMonad t m) => Sy
     dynVar <- externalRefDynamic =<< asks syncEnvNames
     return $ fst <$> dynVar
   {-# INLINE syncKnownNames #-}
-  syncCurrentName = do
-    ref <- asks syncEnvName
-    liftIO $ readIORef ref
+  syncCurrentName = asks syncEnvName
   {-# INLINE syncCurrentName #-}
-  syncUnsafeSetName name = do
-    ref <- asks syncEnvName
-    liftIO $ writeIORef ref name
-  {-# INLINE syncUnsafeSetName #-}
+  syncScopeName name (SyncT ma) = SyncT $ withReaderT setName ma
+    where
+      setName e = e { syncEnvName = name }
+  {-# INLINE syncScopeName #-}
   syncUnsafeRegId name = do
     namesRef <- asks syncEnvNames
     modifyExternalRef namesRef $ \(names, i) -> let

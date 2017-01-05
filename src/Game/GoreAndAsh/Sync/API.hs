@@ -55,6 +55,7 @@ import Control.Lens ((^.))
 import Control.Monad
 import Control.Monad.Catch
 import Control.Monad.Trans
+import Control.Monad.Trans.Control
 import Data.Bifunctor
 import Data.Map.Strict (Map)
 import Data.Monoid
@@ -85,12 +86,17 @@ class (MonadAppHost t m, TimerMonad t m, LoggingMonad t m, MonadMask m)
     syncKnownNames :: m (Dynamic t NameMap)
     -- | Return current scope sync object of synchronization object
     syncCurrentName :: m SyncName
-    -- | Set current scope sync object. Unsafe as change of scope name have to
-    -- occur only at a scope border. See 'syncWithName'.
-    --
-    -- Need this as cannot implement automatic lifting with 'syncWithName' as
-    -- primitive operation.
-    syncUnsafeSetName :: SyncName -> m ()
+    -- -- | Set current scope sync object. Unsafe as change of scope name have to
+    -- -- occur only at a scope border. See 'syncWithName'.
+    -- --
+    -- -- Need this as cannot implement automatic lifting with 'syncWithName' as
+    -- -- primitive operation.
+    -- syncUnsafeSetName :: SyncName -> m ()
+
+    syncScopeName :: SyncName -- ^ Name to use for scope
+      -> m a -- ^ Scope that will see the name in 'syncCurrentName' call
+      -> m a
+
     -- | Register new id for given name (overwrites existing ids).
     --
     -- Used by server to generate id for name.
@@ -105,23 +111,16 @@ syncWithName :: (SyncMonad t m, NetworkClient t m) => SyncName -- ^ Name to use 
   -> a   -- ^ Initial value (before the name is resolved)
   -> m a -- ^ Scope
   -> m (Dynamic t a) -- ^ Result of scope execution
-syncWithName name a0 m = bracket setName syncUnsafeSetName $ const presolve
-  where
-  setName = do
-    oldName <- syncCurrentName
-    syncUnsafeSetName (oldName <> name)
-    return oldName
-  presolve = do
-    name' <- syncCurrentName
-    opts <- syncOptions
-    let role = opts ^. syncOptionsRole
-    case role of
-      SyncSlave ->
-        fmap join $ whenConnected (return $ pure a0) $ \peer ->
-          resolveSyncName peer name' (return a0) (const m)
-      SyncMaster -> makeSyncName name' >> fmap pure m
+syncWithName name a0 m = do
+  let m' = syncScopeName name m
+  opts <- syncOptions
+  let role = opts ^. syncOptionsRole
+  case role of
+    SyncSlave -> fmap join $ whenConnected (return $ pure a0) $ \peer ->
+      resolveSyncName peer name (return a0) (const m')
+    SyncMaster -> makeSyncName name >> fmap pure m'
 
-instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), MonadMask (mt m), MonadTrans mt, SyncMonad t m, TimerMonad t m, LoggingMonad t m)
+instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), MonadMask (mt m), MonadTransControl mt, SyncMonad t m, TimerMonad t m, LoggingMonad t m)
   => SyncMonad t (mt m) where
     syncOptions = lift syncOptions
     {-# INLINE syncOptions #-}
@@ -129,8 +128,10 @@ instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), MonadMask (mt m), MonadTra
     {-# INLINE syncKnownNames #-}
     syncCurrentName = lift syncCurrentName
     {-# INLINE syncCurrentName #-}
-    syncUnsafeSetName = lift . syncUnsafeSetName
-    {-# INLINE syncUnsafeSetName #-}
+    syncScopeName name ma = do
+      res <- liftWith $ \run -> syncScopeName name $ run ma
+      restoreT $ pure res
+    {-# INLINE syncScopeName #-}
     syncUnsafeRegId = lift . syncUnsafeRegId
     {-# INLINE syncUnsafeRegId #-}
     syncUnsafeAddId a b = lift $ syncUnsafeAddId a b
