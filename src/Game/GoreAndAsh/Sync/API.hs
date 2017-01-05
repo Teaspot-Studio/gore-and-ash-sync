@@ -364,28 +364,28 @@ syncFromClient :: (SyncMonad t m, NetworkServer t m, Store a)
   => SyncItemId
   -- | Make initial value
   -> m a
-  -- | Function that checks state from client is actually valid, if the predicate
-  -- returns 'Just', server will send actual local state to client.
-  -> (a -> PushM t (Maybe a))
+  -- | When the event fires, client side info is rejected and payload replaces
+  -- dynamic contents.
+  -> Event t a
   -- | Peer that is listened for values.
   -> Peer
   -- | Dynamic with respect to rejects and event that fires with old and new value
   -- when server rejects client side value.
   -> m (Dynamic t a, Event t (a, a))
-syncFromClient itemId mkInit predicate peer = do
+syncFromClient itemId mkInit rejectE peer = do
   opts <- syncOptions
   let chan = opts ^. syncOptionsChannel
   i <- makeSyncName =<< syncCurrentName
   -- listen for state
   msgE <- syncPeerMessage peer i itemId
   -- check whether we want to reject value
-  let rejectsE = flip push msgE $ \v -> fmap (v, ) <$> predicate v
-      rejectE = snd <$> rejectsE
-      rejectMsgE = encodeSyncMessage ReliableMessage i itemId <$> rejectE
-  _ <- peerChanSend peer chan rejectMsgE
-  -- collect state on server side
-  initVal <- mkInit
-  updatedDyn <- holdDyn initVal $ leftmost [rejectE, msgE]
+  rec
+    let rejectsE = attachWith (,) (current updatedDyn) rejectE
+        rejectMsgE = encodeSyncMessage ReliableMessage i itemId <$> rejectE
+    _ <- peerChanSend peer chan rejectMsgE
+    -- collect state on server side
+    initVal <- mkInit
+    updatedDyn <- holdDyn initVal $ leftmost [rejectE, msgE]
   return (updatedDyn, rejectsE)
 
 -- | Synchronisation from clients to server. Server can reject values and send actuall value.
@@ -398,15 +398,15 @@ syncFromClients :: forall t m a f . (SyncMonad t m, NetworkServer t m, Store a, 
   -> SyncItemId
   -- | Make initial value
   -> (Peer -> m a)
-  -- | Function that checks state from client is actually valid, if the predicate
-  -- returns 'Just', server will send actual local state to client.
-  -> (Peer -> a -> PushM t (Maybe a))
+  -- | When the event fires, client side info is rejected and payload replaces
+  -- dynamic contents.
+  -> Event t (Map Peer a)
   -- | Collected state for each Peer with respect of rejections. The second event
   -- contains info which values were rejected and which values replaced them.
   --
   -- Note: see 'syncFromClient' result type.
   -> m (Dynamic t (Map Peer a), Event t (Map Peer (a, a)))
-syncFromClients peersDyn itemId mkInit predicate = do
+syncFromClients peersDyn itemId mkInit rejectE = do
   switchedMap :: Event t (Dynamic t (Map Peer a), Event t (Map Peer (a, a))) <- dynAppHost $ go <$> peersDyn
   dynPair <- holdDyn (pure mempty, never) switchedMap
   return (join . fmap fst $ dynPair, switchPromptlyDyn . fmap snd $ dynPair)
@@ -419,7 +419,8 @@ syncFromClients peersDyn itemId mkInit predicate = do
       return (dmap, emap)
     goPeer :: Peer -> m (Peer, Dynamic t a, Event t (a, a))
     goPeer peer = do
-      (da, ea) <- syncFromClient itemId (mkInit peer) (predicate peer) peer
+      let rejectE' = fforMaybe rejectE $ M.lookup peer
+      (da, ea) <- syncFromClient itemId (mkInit peer) rejectE' peer
       return (peer, da, ea)
 
 -- | Synchronisation from client to server. Server can reject values and send actuall value.
@@ -430,14 +431,14 @@ syncFromAllClients :: (SyncMonad t m, NetworkServer t m, Store a)
   => SyncItemId
   -- | Make initial value
   -> (Peer -> m a)
-  -- | Function that checks state from client is actually valid, if the predicate
-  -- returns 'Just', server will send actual local state to client.
-  -> (Peer -> a -> PushM t (Maybe a))
+  -- | When the event fires, client side info is rejected and payload replaces
+  -- dynamic contents.
+  -> Event t (Map Peer a)
   -- | Collected state for each Peer.
   -> m (Dynamic t (Map Peer a), Event t (Map Peer (a, a)))
-syncFromAllClients itemId initial predicate = do
+syncFromAllClients itemId initial rejectE = do
   peers <- networkPeers
-  syncFromClients peers itemId initial predicate
+  syncFromClients peers itemId initial rejectE
 
 -- | Receiving high-level message from client to server.
 --

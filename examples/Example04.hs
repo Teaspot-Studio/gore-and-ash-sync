@@ -58,8 +58,7 @@ appServer p = do
   makeSharedCounters :: m (Dynamic t [Int])
   makeSharedCounters = do
     let makeInitial = const $ pure 0
-        rejectBehavior = const . const $ pure Nothing
-    dynMap <- fst <$> syncFromAllClients counterId makeInitial rejectBehavior
+    dynMap <- fst <$> syncFromAllClients counterId makeInitial never
     return $ F.toList <$> dynMap
 
 -- | Find server address by host name or IP
