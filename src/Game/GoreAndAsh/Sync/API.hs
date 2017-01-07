@@ -107,7 +107,8 @@ class (MonadAppHost t m, TimerMonad t m, LoggingMonad t m, MonadMask m)
     syncUnsafeAddId :: SyncName -> SyncId -> m ()
 
 -- | Execute nested action with given scope name and restore it after
-syncWithName :: (SyncMonad t m, NetworkClient t m) => SyncName -- ^ Name to use for scope
+syncWithName :: (SyncMonad t m, NetworkClient t m)
+  => SyncName -- ^ Name to use for scope
   -> a   -- ^ Initial value (before the name is resolved)
   -> m a -- ^ Scope
   -> m (Dynamic t a) -- ^ Result of scope execution
@@ -116,8 +117,9 @@ syncWithName name a0 m = do
   opts <- syncOptions
   let role = opts ^. syncOptionsRole
   case role of
-    SyncSlave -> fmap join $ whenConnected (return $ pure a0) $ \peer ->
-      resolveSyncName peer name (return a0) (const m')
+    SyncSlave -> do
+      fmap join $ whenConnected (return $ pure a0) $ \peer -> do
+        resolveSyncName peer name (return a0) (const m')
     SyncMaster -> makeSyncName name >> fmap pure m'
 
 instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), MonadMask (mt m), MonadTransControl mt, SyncMonad t m, TimerMonad t m, LoggingMonad t m)
@@ -613,7 +615,7 @@ syncFromServer itemId initVal = do
       -- send initial request to inform client of initial value for rarely changing values
       buildE <- getPostBuild
       let reqE = const (encodeSyncRequest ReliableMessage i itemId) <$> buildE
-      logVerboseE $ ffor buildE $ const $ "Sync: Sending request for initial value of " <> showl itemId
+      logVerboseE $ ffor buildE $ const $ "Sync: Sending request for initial value of " <> showl itemId <> " for scope " <> showl name
       _ <- peerChanSend peer chan reqE
       -- listen for responds of server
       msgE <- syncPeerMessage peer i itemId
@@ -811,7 +813,8 @@ resolveSyncName peer name im m = do
     Nothing -> do
       opts <- syncOptions
       buildE <- getPostBuild
-      let resolvedE = fforMaybe (updated namesDyn) $ H.lookup name
+      let resolvedEMany = fforMaybe (updated namesDyn) $ H.lookup name
+      resolvedE <- headE resolvedEMany
       tickE <- tickEveryUntil (opts ^. syncOptionsResolveDelay) resolvedE
       let chan = opts ^. syncOptionsChannel
           requestE = leftmost [tickE, buildE]
