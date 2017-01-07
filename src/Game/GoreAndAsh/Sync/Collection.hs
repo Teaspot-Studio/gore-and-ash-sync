@@ -55,15 +55,13 @@ hostCollection itemId peersDyn initialMap addDelMap toClientVal makeComponent = 
             addRemove m k (Just v) = M.insert k v m
         return $ M.foldlWithKey' addRemove kvMap diffMap
   -- listen messages from client about the remote collections
-  msgE :: Event t (Peer, RemoteCollectionMsg k v') <- listenCollectionMsg chan
+  msgE :: Event t (Peer, RemoteCollectionMsg k v') <- listenCollectionMsg chan i itemId
   -- filter requests for current content of collection
   let reqE = flip push msgE $ \msg -> do
         peers <- sample . current $ peersDyn
         return $ case msg of
           (peer, RemoteComponentsRequest{..}) ->
-            if   remoteComponentSyncId == i
-              && remoteComponentItemId == itemId
-              && peer `S.member` peers -- only peers that are in allowed set
+            if peer `S.member` peers -- only peers that are in allowed set
               then Just peer
               else Nothing
           _ -> Nothing
@@ -127,11 +125,13 @@ remoteCollection itemId makeComponent = fmap join $ whenConnected (pure mempty) 
 -- | Listen for collection message
 listenCollectionMsg :: (NetworkMonad t m, LoggingMonad t m, Store k, Store v)
   => ChannelID -- ^ Channel that is used for collection messages
+  -> SyncId -- ^ ID of scope
+  -> SyncItemId -- ^ ID of item in scope
   -> m (Event t (Peer, RemoteCollectionMsg k v))
-listenCollectionMsg chan = do
+listenCollectionMsg chan i itemId = do
   e <- networkMessage
   let e' = fforMaybe e $ \(peer, chan', bs) -> if chan == chan'
-        then Just $ (peer,) <$> decodeRemoteCollectionMsg bs
+        then sequence $ fmap (peer,) <$> decodeRemoteCollectionMsg bs i itemId
         else Nothing
       printDecodeError de = "Failed to decode remote collection msg: " <> showl de
   logEitherWarn $ first printDecodeError <$> e'
@@ -144,10 +144,7 @@ listenPeerCollectionMsg :: (NetworkMonad t m, LoggingMonad t m, Store k, Store v
   -> SyncItemId -- ^ ID of sync object
   -> m (Event t (RemoteCollectionMsg k v))
 listenPeerCollectionMsg peer chan i itemId = do
-  msgE <- listenCollectionMsg chan
-  return $ fforMaybe msgE $ \(peer', msg) -> if
-       peer == peer'
-    && remoteComponentSyncId msg == i
-    && remoteComponentItemId msg == itemId
+  msgE <- listenCollectionMsg chan i itemId
+  return $ fforMaybe msgE $ \(peer', msg) -> if peer == peer'
     then Just msg
     else Nothing

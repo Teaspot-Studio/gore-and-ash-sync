@@ -137,19 +137,24 @@ sendComponentsRequestMsg peer chan i itemId ek = peerChanSend peer chan $
 -- from network module.
 decodeRemoteCollectionMsg :: (Store k, Store v)
   => ByteString -- ^ Payload to decode
-  -> Either PeekException (RemoteCollectionMsg k v)
-decodeRemoteCollectionMsg bs = do
+  -> SyncId -- ^ ID of scope
+  -> SyncItemId -- ^ ID of item
+  -- | Returns Nothing if ids are different from passed
+  -> Either PeekException (Maybe (RemoteCollectionMsg k v))
+decodeRemoteCollectionMsg bs i itemId = do
   tempMsg :: RemoteCollectionMsg ByteString ByteString <- decode bs
-  case tempMsg of
-    RemoteComponentCreate{..} -> RemoteComponentCreate
-      <$> pure remoteComponentSyncId
-      <*> pure remoteComponentItemId
-      <*> decode remoteComponentKey
-      <*> decode remoteComponentValue
-    RemoteComponentDelete{..} -> RemoteComponentDelete
-      <$> pure remoteComponentSyncId
-      <*> pure remoteComponentItemId
-      <*> decode remoteComponentKey
-    RemoteComponentsRequest{..} -> RemoteComponentsRequest
-      <$> pure remoteComponentSyncId
-      <*> pure remoteComponentItemId
+  if i == remoteComponentSyncId tempMsg && itemId == remoteComponentItemId tempMsg
+    then fmap Just $ case tempMsg of
+      RemoteComponentCreate{..} -> RemoteComponentCreate
+        <$> pure remoteComponentSyncId
+        <*> pure remoteComponentItemId
+        <*> decode remoteComponentKey
+        <*> decode remoteComponentValue
+      RemoteComponentDelete{..} -> RemoteComponentDelete
+        <$> pure remoteComponentSyncId
+        <*> pure remoteComponentItemId
+        <*> decode remoteComponentKey
+      RemoteComponentsRequest{..} -> RemoteComponentsRequest
+        <$> pure remoteComponentSyncId
+        <*> pure remoteComponentItemId
+    else return Nothing
