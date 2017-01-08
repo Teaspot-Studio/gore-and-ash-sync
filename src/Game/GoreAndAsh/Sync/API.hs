@@ -16,9 +16,12 @@ module Game.GoreAndAsh.Sync.API(
   , ClientSynced(..)
   , serverRejected
   , conditional
+  , syncWithNameWith
   , syncWithName
   -- ** Server side
+  , syncToClientManual
   , syncToClient
+  , syncToClientsManual
   , syncToClients
   , syncToAllClients
   , sendToClient
@@ -35,6 +38,7 @@ module Game.GoreAndAsh.Sync.API(
   , receiveFromAllClients
   -- ** Client side
   , syncToServer
+  , syncFromServerWith
   , syncFromServer
   , sendToServer
   , sendToServerMany
@@ -86,13 +90,10 @@ class (MonadAppHost t m, TimerMonad t m, LoggingMonad t m, MonadMask m)
     syncKnownNames :: m (Dynamic t NameMap)
     -- | Return current scope sync object of synchronization object
     syncCurrentName :: m SyncName
-    -- -- | Set current scope sync object. Unsafe as change of scope name have to
-    -- -- occur only at a scope border. See 'syncWithName'.
-    -- --
-    -- -- Need this as cannot implement automatic lifting with 'syncWithName' as
-    -- -- primitive operation.
-    -- syncUnsafeSetName :: SyncName -> m ()
 
+    -- | Set current scope name without resolving or generation id for the name.
+    --
+    -- It is low-level operation, you probably want to see 'syncWithName'.
     syncScopeName :: SyncName -- ^ Name to use for scope
       -> m a -- ^ Scope that will see the name in 'syncCurrentName' call
       -> m a
@@ -107,20 +108,32 @@ class (MonadAppHost t m, TimerMonad t m, LoggingMonad t m, MonadMask m)
     syncUnsafeAddId :: SyncName -> SyncId -> m ()
 
 -- | Execute nested action with given scope name and restore it after
-syncWithName :: (SyncMonad t m, NetworkClient t m)
-  => SyncName -- ^ Name to use for scope
-  -> a   -- ^ Initial value (before the name is resolved)
-  -> m a -- ^ Scope
+--
+-- Instead of 'syncWithName' uses dynamic for initial values, that is important
+-- for aligning states of initial value and values of generated dynamic in future
+-- after scope is resolved.
+syncWithNameWith :: (SyncMonad t m, NetworkClient t m)
+  => SyncName     -- ^ Name to use for scope
+  -> Dynamic t a  -- ^ Initial value (before the name is resolved)
+  -> m a          -- ^ Scope
   -> m (Dynamic t a) -- ^ Result of scope execution
-syncWithName name a0 m = do
+syncWithNameWith name initDyn m =  do
   let m' = syncScopeName name m
   opts <- syncOptions
   let role = opts ^. syncOptionsRole
   case role of
     SyncSlave -> do
-      fmap join $ whenConnected (return $ pure a0) $ \peer -> do
-        resolveSyncName peer name (return a0) (const m')
+      fmap join $ whenConnected (return initDyn) $ \peer -> do
+        resolveSyncName peer name (sample . current $ initDyn) (const m')
     SyncMaster -> makeSyncName name >> fmap pure m'
+
+-- | Execute nested action with given scope name and restore it after
+syncWithName :: (SyncMonad t m, NetworkClient t m)
+  => SyncName -- ^ Name to use for scope
+  -> a   -- ^ Initial value (before the name is resolved)
+  -> m a -- ^ Scope
+  -> m (Dynamic t a) -- ^ Result of scope execution
+syncWithName name a0 = syncWithNameWith name (pure a0)
 
 instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), MonadMask (mt m), MonadTransControl mt, SyncMonad t m, TimerMonad t m, LoggingMonad t m)
   => SyncMonad t (mt m) where
@@ -147,6 +160,47 @@ instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), MonadMask (mt m), MonadTra
 -- You can group 'syncToClient' calls within a single set of peers (see 'networkPeers')
 -- as it more efficient than calling 'syncToAllClients' for each dynamic for the
 -- same set of peers.
+syncToClientManual :: (SyncMonad t m, NetworkServer t m, Store a)
+  -- | Unique name of synchronization value withing current scope
+  => SyncItemId
+  -- | Underlying message type for sending, you can set unrelable delivery if
+  -- the data rapidly changes.
+  -> MessageType
+  -- | Source of data to transfer to clients. Note that updated to clients
+  -- are performed each time the dynamic fires event the current value of
+  -- internal behavior isn't changed.
+  -> Dynamic t a
+  -- | Manual send event. Send contents of dynamics to client only when the
+  -- event fires.
+  -> Event t ()
+  -- | Client that is target of synchronisation.
+  -> Peer
+  -- | Returns event that fires when a value was synced to given peers
+  -> m (Event t ())
+syncToClientManual itemId mt da manualE peer = do
+  buildE <- getPostBuild
+  opts <- syncOptions
+  let chan = opts ^. syncOptionsChannel
+  i <- makeSyncName =<< syncCurrentName
+  -- listen for requests
+  reqE <- syncRequestMessage peer i itemId
+  let respE = tagPromptlyDyn da reqE
+  logVerboseE $ ffor respE $ const $ "Sync: Got request for initial value of " <> showl itemId
+  -- send updates
+  let initialE = tagPromptlyDyn da buildE
+      manualE' = tagPromptlyDyn da manualE
+      updatedE = leftmost [manualE', respE, initialE]
+      msgE = fmap (encodeSyncMessage mt i itemId) updatedE
+  peerChanSend peer chan msgE
+
+-- | Start streaming given dynamic value to specific client.
+--
+-- Intended to be called on server side and a corresponding 'syncFromServer'
+-- call is needed on client side.
+--
+-- You can group 'syncToClient' calls within a single set of peers (see 'networkPeers')
+-- as it more efficient than calling 'syncToAllClients' for each dynamic for the
+-- same set of peers.
 syncToClient :: (SyncMonad t m, NetworkServer t m, Store a)
   -- | Unique name of synchronization value withing current scope
   => SyncItemId
@@ -161,20 +215,30 @@ syncToClient :: (SyncMonad t m, NetworkServer t m, Store a)
   -> Peer
   -- | Returns event that fires when a value was synced to given peers
   -> m (Event t ())
-syncToClient itemId mt da peer = do
-  buildE <- getPostBuild
-  opts <- syncOptions
-  let chan = opts ^. syncOptionsChannel
-  i <- makeSyncName =<< syncCurrentName
-  -- listen for requests
-  reqE <- syncRequestMessage peer i itemId
-  let respE = tagPromptlyDyn da reqE
-  logVerboseE $ ffor respE $ const $ "Sync: Got request for initial value of " <> showl itemId
-  -- send updates
-  let initialE = tagPromptlyDyn da buildE
-      updatedE = leftmost [updated da, respE, initialE]
-      msgE = fmap (encodeSyncMessage mt i itemId) updatedE
-  peerChanSend peer chan msgE
+syncToClient itemId mt da peer = syncToClientManual itemId mt da (const () <$> updated da) peer
+
+-- | Start streaming given dynamic value to all connected clients.
+--
+-- Intended to be called on server side and a corresponding 'syncFromServer'
+-- call is needed on client side.
+syncToClientsManual :: (SyncMonad t m, NetworkServer t m, Store a, Foldable f)
+  -- | Set of clients that should be informed about chages of the value
+  => Dynamic t (f Peer)
+  -- | Unique name of synchronization value withing current scope
+  -> SyncItemId
+  -- | Underlying message type for sending, you can set unrelable delivery if
+  -- the data rapidly changes.
+  -> MessageType
+  -- | Source of data to transfer to clients. Note that updated to clients
+  -- are performed each time the dynamic fires event the current value of
+  -- internal behavior isn't changed.
+  -> Dynamic t a
+  -- | Manual send event. Send contents of dynamics to client only when the
+  -- event fires.
+  -> Event t ()
+  -- | Returns event that fires when a value was synced to given peers
+  -> m (Event t ())
+syncToClientsManual peers itemId mt da manualE = dynAppHost $ mapM_ (syncToClientManual itemId mt da manualE) <$> peers
 
 -- | Start streaming given dynamic value to all connected clients.
 --
@@ -243,7 +307,6 @@ sendToClient itemId mt ea peer = do
   -- send updates
   let msgE = fmap (encodeSyncMessage mt i itemId) ea
   peerChanSend peer chan msgE
-
 
 -- | Send given high-level message to given peers.
 --
@@ -573,10 +636,11 @@ predictM :: (MonadAppHost t m)
   -- predicted values are substituted with the new one.
   -> m (Dynamic t a)
 predictM origDyn tickE predictFunc = do
-  dynDyn <- holdAppHost (pure origDyn) (predict' <$> updated origDyn)
+  a <- sample . current $ origDyn
+  let mkStep v = foldDynM predictFunc v tickE
+  initialDyn <- mkStep a
+  dynDyn <- holdAppHost (pure initialDyn) $ mkStep <$> updated origDyn
   return $ join dynDyn
-  where
-    predict' a = foldDynM predictFunc a tickE
 
 -- | Make predictions about next value of dynamic. This helper should be handy
 -- for implementing client side prediction of values from server.
@@ -598,20 +662,21 @@ predictMaybeM origDyn tickE predictFunc = do
   where
     predict' a = foldDynMaybeM predictFunc a tickE
 
--- | Receive stream of values from remote server.
+-- | Receive stream of values from remote server. With explicit value to use for
+-- initial values that are used until connected to server and until scope name
+-- is resolved.
 --
 -- Matches to call of 'syncToClient', should be called on client side.
-syncFromServer :: (SyncMonad t m, NetworkClient t m, Store a)
+syncFromServerWith :: (SyncMonad t m, NetworkClient t m, Store a)
   => SyncItemId -- ^ Unique name of synchronization value withing current scope
-  -> a -- ^ Initial value
+  -> Dynamic t a -- ^ Which dynamic to use for initial value
   -> m (Dynamic t a)
-syncFromServer itemId initVal = do
+syncFromServerWith itemId initDyn = do
   opts <- syncOptions
   let chan = opts ^. syncOptionsChannel
-  let pureInitVal = return $ pure initVal
   name <- syncCurrentName
-  fmap join $ whenConnected pureInitVal $ \peer -> do -- first wait until connected
-    fmap join $ resolveSyncName peer name pureInitVal $ \i -> do -- wait for id
+  fmap join $ whenConnected (return initDyn) $ \peer -> do -- first wait until connected
+    fmap join $ resolveSyncName peer name (return initDyn) $ \i -> do -- wait for id
       -- send initial request to inform client of initial value for rarely changing values
       buildE <- getPostBuild
       let reqE = const (encodeSyncRequest ReliableMessage i itemId) <$> buildE
@@ -619,7 +684,17 @@ syncFromServer itemId initVal = do
       _ <- peerChanSend peer chan reqE
       -- listen for responds of server
       msgE <- syncPeerMessage peer i itemId
-      holdDyn initVal msgE -- here collect updates in dynamic
+      a <- sample . current $ initDyn
+      holdDyn a msgE -- here collect updates in dynamic
+
+-- | Receive stream of values from remote server.
+--
+-- Matches to call of 'syncToClient', should be called on client side.
+syncFromServer :: (SyncMonad t m, NetworkClient t m, Store a)
+  => SyncItemId -- ^ Unique name of synchronization value withing current scope
+  -> a -- ^ Initial value
+  -> m (Dynamic t a)
+syncFromServer itemId initVal = syncFromServerWith itemId (pure initVal)
 
 -- | Receive message from remote server.
 --

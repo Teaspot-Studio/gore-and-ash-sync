@@ -36,9 +36,12 @@ module Game.GoreAndAsh.Sync(
   , ClientSynced(..)
   , serverRejected
   , conditional
+  , syncWithNameWith
   , syncWithName
   -- ** Server side
+  , syncToClientManual
   , syncToClient
+  , syncToClientsManual
   , syncToClients
   , syncToAllClients
   , sendToClient
@@ -55,6 +58,7 @@ module Game.GoreAndAsh.Sync(
   , receiveFromAllClients
   -- ** Client side
   , syncToServer
+  , syncFromServerWith
   , syncFromServer
   , sendToServer
   , sendToServerMany
