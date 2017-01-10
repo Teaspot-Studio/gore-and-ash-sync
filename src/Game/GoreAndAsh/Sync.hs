@@ -68,6 +68,7 @@ module Game.GoreAndAsh.Sync(
   , predictMaybe
   , predictM
   , predictMaybeM
+  , predictInterpolateM
   -- * Collections
   , hostCollection
   , hostSimpleCollection
@@ -78,3 +79,4 @@ import Game.GoreAndAsh.Sync.API as X
 import Game.GoreAndAsh.Sync.Collection as X
 import Game.GoreAndAsh.Sync.Module as X
 import Game.GoreAndAsh.Sync.Options as X
+import Game.GoreAndAsh.Sync.Predict as X

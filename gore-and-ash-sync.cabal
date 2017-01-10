@@ -35,6 +35,7 @@ library
     Game.GoreAndAsh.Sync.Message
     Game.GoreAndAsh.Sync.Module
     Game.GoreAndAsh.Sync.Options
+    Game.GoreAndAsh.Sync.Predict
   default-language:    Haskell2010
   build-depends:
      base                     >= 4.7      && < 5
