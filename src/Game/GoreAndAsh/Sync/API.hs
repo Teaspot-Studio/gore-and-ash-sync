@@ -59,6 +59,7 @@ import Data.Bifunctor
 import Data.Map.Strict (Map)
 import Data.Monoid
 import Data.Store
+import Data.Word
 import Game.GoreAndAsh.Core
 import Game.GoreAndAsh.Logging
 import Game.GoreAndAsh.Network
@@ -101,6 +102,13 @@ class (MonadAppHost t m, TimerMonad t m, LoggingMonad t m, MonadMask m)
     --
     -- Used by client to register id requested from server.
     syncUnsafeAddId :: SyncName -> SyncId -> m ()
+
+    -- | Increase per peer message counter and return its value
+    syncIncSendCounter :: Peer -> m Word16
+
+    -- | If it returns 'True', the package with the counter value is not too late.
+    -- Updates maximum value of internal counter.
+    syncCheckReceiveCounter :: Peer -> Word16 -> m Bool
 
 -- | Execute nested action with given scope name and restore it after
 --
@@ -146,6 +154,10 @@ instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), MonadMask (mt m), MonadTra
     {-# INLINE syncUnsafeRegId #-}
     syncUnsafeAddId a b = lift $ syncUnsafeAddId a b
     {-# INLINE syncUnsafeAddId #-}
+    syncIncSendCounter p = lift $ syncIncSendCounter p
+    {-# INLINE syncIncSendCounter #-}
+    syncCheckReceiveCounter p c = lift $ syncCheckReceiveCounter p c
+    {-# INLINE syncCheckReceiveCounter #-}
 
 -- | Start streaming given dynamic value to specific client.
 --
@@ -185,7 +197,21 @@ syncToClientManual itemId mt da manualE peer = do
   let initialE = tagPromptlyDyn da buildE
       manualE' = tagPromptlyDyn da manualE
       updatedE = leftmost [manualE', respE, initialE]
-      msgE = fmap (encodeSyncMessage mt i itemId) updatedE
+  sendSyncPayload peer chan mt i itemId updatedE
+
+-- | Send payload of synced value
+sendSyncPayload :: forall t m a . (SyncMonad t m, NetworkMonad t m, Store a)
+  => Peer -- ^ Peer to send payload to
+  -> ChannelID -- ^ Channel ID to send over
+  -> MessageType -- ^ Type of messaage, reliability
+  -> SyncId -- ^ Scope id
+  -> SyncItemId -- ^ id of item in scope
+  -> Event t a -- ^ Payload
+  -> m (Event t ())
+sendSyncPayload peer chan mt i itemId ea = do
+  msgE <- performAppHost $ ffor ea $ \a -> do
+    c <- syncIncSendCounter peer
+    return $ encodeSyncMessage mt i itemId c a
   peerChanSend peer chan msgE
 
 -- | Start streaming given dynamic value to specific client.
@@ -300,7 +326,7 @@ sendToClient itemId mt ea peer = do
   let chan = opts ^. syncOptionsChannel
   i <- makeSyncName =<< syncCurrentName
   -- send updates
-  let msgE = fmap (encodeSyncMessage mt i itemId) ea
+  let msgE = fmap (encodeSyncCommand mt i itemId) ea
   peerChanSend peer chan msgE
 
 -- | Send given high-level message to given peers.
@@ -368,7 +394,7 @@ sendToClientMany itemId mt eas peer = do
   let chan = opts ^. syncOptionsChannel
   i <- makeSyncName =<< syncCurrentName
   -- send updates
-  let msgsE = fmap (encodeSyncMessage mt i itemId) <$> eas
+  let msgsE = fmap (encodeSyncCommand mt i itemId) <$> eas
   peerChanSendMany peer chan msgsE
 
 
@@ -441,8 +467,7 @@ syncFromClient itemId mkInit rejectE peer = do
   -- check whether we want to reject value
   rec
     let rejectsE = attachWith (,) (current updatedDyn) rejectE
-        rejectMsgE = encodeSyncMessage ReliableMessage i itemId <$> rejectE
-    _ <- peerChanSend peer chan rejectMsgE
+    _ <- peerChanSend peer chan $ encodeSyncCommand ReliableMessage i itemId <$> rejectE
     -- collect state on server side
     initVal <- mkInit
     updatedDyn <- holdDyn initVal $ leftmost [rejectE, msgE]
@@ -515,7 +540,7 @@ receiveFromClient :: (SyncMonad t m, NetworkServer t m, Store a)
   -> m (Event t a)
 receiveFromClient itemId peer = do
   i <- makeSyncName =<< syncCurrentName
-  syncPeerMessage peer i itemId
+  syncPeerCommand peer i itemId
 
 -- | Receiving high-level message from client to server.
 --
@@ -621,7 +646,7 @@ receiveFromServer itemId = do
   fmap switchPromptlyDyn $ whenConnected (pure never) $ \peer -> do -- first wait until connected
     fmap switchPromptlyDyn $ resolveSyncName peer name (pure never) $ \i -> do -- wait for id
       -- listen for responds of server
-      syncPeerMessage peer i itemId
+      syncPeerCommand peer i itemId
 
 -- | Result of execution of 'syncToServer'
 data ClientSynced a =
@@ -662,11 +687,9 @@ syncToServer itemId mt da = do
     dynEv <- resolveSyncName peer name (pure never) $ \i -> do -- wait for id
       -- we need to send initial request to inform client of initial value for rarely changing values
       buildE <- getPostBuild
-      let initialE = encodeSyncMessage mt i itemId <$> tagPromptlyDyn da buildE
-          updatedE = encodeSyncMessage mt i itemId <$> updated da
-      sendedE <- peerChanSend peer chan $ leftmost [updatedE, initialE]
+      sendedE <- sendSyncPayload peer chan mt i itemId $ leftmost [updated da, tagPromptlyDyn da buildE]
       -- listen for responds of server
-      msgE <- syncPeerMessage peer i itemId
+      msgE <- syncPeerCommand peer i itemId
       -- we can either inform about rejected value or that we synced to server
       return $ leftmost [
           ServerRejected <$> msgE
@@ -694,7 +717,7 @@ sendToServer itemId mt ea = do
   name <- syncCurrentName
   fmap switchPromptlyDyn $ whenConnected (pure never) $ \peer -> do -- first wait until connected
     fmap switchPromptlyDyn $ resolveSyncName peer name (pure never) $ \i -> do -- wait for id
-      let msgE = encodeSyncMessage mt i itemId <$> ea
+      let msgE = encodeSyncCommand mt i itemId <$> ea
       peerChanSend peer chan msgE
 
 -- | Synchronisation from client to server. Server can reject values and send actual state.
@@ -716,7 +739,7 @@ sendToServerMany itemId mt eas = do
   name <- syncCurrentName
   fmap switchPromptlyDyn $ whenConnected (pure never) $ \peer -> do -- first wait until connected
     fmap switchPromptlyDyn $ resolveSyncName peer name (pure never) $ \i -> do -- wait for id
-      let msgsE = fmap (encodeSyncMessage mt i itemId) <$> eas
+      let msgsE = fmap (encodeSyncCommand mt i itemId) <$> eas
       peerChanSendMany peer chan msgsE
 
 -- | Helper that fires when a synchronization message in interest arrives
@@ -725,7 +748,8 @@ syncMessage :: (SyncMonad t m, NetworkMonad t m)
 syncMessage predicate = do
   opts <- syncOptions
   let chan = opts ^. syncOptionsChannel
-  msgE <- chanMessage chan
+  -- msgE <- chanMessage chan
+  logInfoE $ fmap (const "!") msgE
   logEitherWarn $ fforMaybe msgE $ \(peer, bs) -> moveEither $ do
     msg <- decodeSyncMessage bs
     return $ predicate peer msg
@@ -762,13 +786,35 @@ syncPeerMessage :: (SyncMonad t m, NetworkMonad t m, Store a)
   -> m (Event t a)
 syncPeerMessage peer i itemId = do
   msgE <- syncMessage $ \peer' msg -> case msg of
-    SyncPayloadMessage i' itemId' bs -> if peer == peer' && i == i' && itemId == itemId'
+    SyncPayloadMessage i' itemId' c bs -> if peer == peer' && i == i' && itemId == itemId'
+      then Just (c, bs)
+      else Nothing
+    _ -> Nothing
+  notLateE <- fmap (fmapMaybe id) $ performAppHost $ ffor msgE $ \(c, bs) -> do
+    notLate <- syncCheckReceiveCounter peer c
+    return $ if notLate then Just bs else Nothing
+  logEitherWarn $ ffor notLateE $ first mkDecodeFailMsg . decode
+  where
+    mkDecodeFailMsg e = "Sync: Failed to decode payload for scope: "
+      <> showl i <> ", with item id: "
+      <> showl itemId <> ", error: "
+      <> showl e
+
+-- | Helper, fires when a synchronization command arrived
+syncPeerCommand :: (SyncMonad t m, NetworkMonad t m, Store a)
+  => Peer -- ^ Peer that should send the message
+  -> SyncId -- ^ Scope id that is expected
+  -> SyncItemId -- ^ Sync item id in scope
+  -> m (Event t a)
+syncPeerCommand peer i itemId = do
+  msgE <- syncMessage $ \peer' msg -> case msg of
+    SyncCommandMessage i' itemId' bs -> if peer == peer' && i == i' && itemId == itemId'
       then Just bs
       else Nothing
     _ -> Nothing
   logEitherWarn $ ffor msgE $ first mkDecodeFailMsg . decode
   where
-    mkDecodeFailMsg e = "Sync: Failed to decode payload for scope: "
+    mkDecodeFailMsg e = "Sync: Failed to decode command for scope: "
       <> showl i <> ", with item id: "
       <> showl itemId <> ", error: "
       <> showl e

@@ -19,7 +19,10 @@ import Control.Monad.Except
 import Control.Monad.Reader
 import Control.Monad.Trans.Control
 import Control.Monad.Trans.Resource
+import Data.IORef
+import Data.Map.Strict (Map)
 import Data.Proxy
+import Data.Word
 import Game.GoreAndAsh
 import Game.GoreAndAsh.Logging
 import Game.GoreAndAsh.Network
@@ -29,6 +32,7 @@ import Game.GoreAndAsh.Sync.Options
 import Game.GoreAndAsh.Time
 
 import qualified Data.HashMap.Strict as H
+import qualified Data.Map.Strict as M
 
 -- | Name of global scope for synchronisation that is created
 -- by default.
@@ -40,21 +44,29 @@ globalSyncName = ""
 -- | Internal state of core module
 data SyncEnv t = SyncEnv {
   -- | Module options
-  syncEnvOptions :: SyncOptions ()
+  syncEnvOptions         :: SyncOptions ()
   -- | Storage of name map and next free id
-, syncEnvNames :: ExternalRef t (NameMap, SyncId)
+, syncEnvNames           :: ExternalRef t (NameMap, SyncId)
   -- | Current sync object
-, syncEnvName :: SyncName
+, syncEnvName            :: SyncName
+  -- | Store current values of send counter for each peer
+, syncEnvSendCounters    :: IORef (Map Peer Word16)
+  -- | Store current values of receive counter for each peer
+, syncEnvReceiveCounters :: IORef (Map Peer Word16)
 }
 
 -- | Creation of intial sync state
 newSyncEnv :: MonadAppHost t m => SyncOptions s -> m (SyncEnv t)
 newSyncEnv opts = do
   namesRef <- newExternalRef (H.singleton globalSyncName 0, 1)
+  sendCounters <- liftIO $ newIORef mempty
+  receiveCounters <- liftIO $ newIORef mempty
   return SyncEnv {
     syncEnvOptions = opts & syncOptionsNext .~ ()
   , syncEnvNames = namesRef
   , syncEnvName = globalSyncName
+  , syncEnvSendCounters = sendCounters
+  , syncEnvReceiveCounters = receiveCounters
   }
 
 -- | Monad transformer of synchronization core module.
@@ -153,3 +165,22 @@ instance (MonadAppHost t m, MonadMask m, TimerMonad t m, LoggingMonad t m) => Sy
       state' = names' `seq` i' `seq` (names', i')
       in (state', ())
   {-# INLINE syncUnsafeAddId #-}
+
+  syncIncSendCounter p = do
+    ref <- asks syncEnvSendCounters
+    liftIO $ atomicModifyIORef' ref $ \m -> case M.lookup p m of
+      Nothing -> (M.insert p 1 m, 0)
+      Just c  -> if c == maxBound
+        then (M.insert p 1 m, 0)
+        else (M.insert p (c+1) m, c)
+  {-# INLINE syncIncSendCounter #-}
+
+  syncCheckReceiveCounter p c = do
+    ref <- asks syncEnvReceiveCounters
+    liftIO $ atomicModifyIORef' ref $ \m -> case M.lookup p m of
+      Nothing -> (M.insert p c m, True)
+      Just c' -> let
+        maxc = max c c'
+        next = if maxc == maxBound then 0 else maxc
+        in if c >= c' then (M.insert p next m, True) else (m, False)
+  {-# INLINE syncCheckReceiveCounter #-}

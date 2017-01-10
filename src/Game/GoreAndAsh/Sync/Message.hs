@@ -14,6 +14,7 @@ module Game.GoreAndAsh.Sync.Message(
   , SyncMessage(..)
   , SyncServiceMessage(..)
   , encodeSyncMessage
+  , encodeSyncCommand
   , encodeSyncRequest
   , encodeSyncServiceMsg
   , decodeSyncMessage
@@ -52,6 +53,13 @@ data SyncMessage =
   | SyncPayloadMessage {
       syncId      :: !SyncId     -- ^ Scope id
     , syncItemId  :: !SyncItemId -- ^ Specific value id
+    , syncCounter :: !Word16     -- ^ Counter of message, messages being late are droped
+    , syncPayload :: !ByteString -- ^ Payload with updated value
+    }
+  -- | Payloads for single commands that aren't sequenced
+  | SyncCommandMessage {
+      syncId      :: !SyncId     -- ^ Scope id
+    , syncItemId  :: !SyncItemId -- ^ Specific value id
     , syncPayload :: !ByteString -- ^ Payload with updated value
     }
   -- | Request of value from consumer (needed for rarely changing values)
@@ -74,8 +82,12 @@ data SyncServiceMessage =
 instance Store SyncServiceMessage
 
 -- | Convert sync message into message of underlying network module
-encodeSyncMessage :: Store a => MessageType -> SyncId -> SyncItemId -> a -> Message
-encodeSyncMessage mt i ii a = Message mt (encode $ SyncPayloadMessage i ii $ encode a)
+encodeSyncMessage :: Store a => MessageType -> SyncId -> SyncItemId -> Word16 -> a -> Message
+encodeSyncMessage mt i ii c a = Message mt (encode $ SyncPayloadMessage i ii c $ encode a)
+
+-- | Convert sync message into message of underlying network module
+encodeSyncCommand :: Store a => MessageType -> SyncId -> SyncItemId -> a -> Message
+encodeSyncCommand mt i ii a = Message mt (encode $ SyncCommandMessage i ii $ encode a)
 
 -- | Convert sync message into message of underlying network module
 encodeSyncRequest :: MessageType -> SyncId -> SyncItemId -> Message
