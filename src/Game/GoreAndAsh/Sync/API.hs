@@ -748,8 +748,8 @@ syncMessage :: (SyncMonad t m, NetworkMonad t m)
 syncMessage predicate = do
   opts <- syncOptions
   let chan = opts ^. syncOptionsChannel
-  -- msgE <- chanMessage chan
-  logInfoE $ fmap (const "!") msgE
+  msgE <- chanMessage chan
+  --logInfoE $ fmap (const "!") msgE
   logEitherWarn $ fforMaybe msgE $ \(peer, bs) -> moveEither $ do
     msg <- decodeSyncMessage bs
     return $ predicate peer msg
