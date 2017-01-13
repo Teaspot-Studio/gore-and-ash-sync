@@ -58,8 +58,8 @@ encodeComponentCreateMsg :: (Store k, Store v)
   -> SyncItemId -- ^ Sync item static id
   -> k -- ^ Component key
   -> v -- ^ Component create value
-  -> Message
-encodeComponentCreateMsg i itemId k v = Message ReliableMessage $
+  -> ByteString
+encodeComponentCreateMsg i itemId k v =
   encode RemoteComponentCreate {
       remoteComponentSyncId = i
     , remoteComponentItemId = itemId
@@ -69,15 +69,15 @@ encodeComponentCreateMsg i itemId k v = Message ReliableMessage $
 
 -- | Send message about remote collection component creation from
 -- incoming event.
-sendComponentCreateMsg :: (LoggingMonad t m, NetworkMonad t m, Store k, Store v)
-  => Peer -- ^ Client which we are sending
-  -> ChannelID -- ^ ID of channel to use
+sendComponentCreateMsg :: (LoggingMonad t m, NetworkMonad t b m, Store k, Store v)
+  => Peer b -- ^ Client which we are sending
+  -> ChannelId -- ^ ID of channel to use
   -> SyncId -- ^ Sync scope dynamic id
   -> SyncItemId -- ^ Sync item static id
   -> Event t (k, v) -- ^ Key and creation value of component
   -> m (Event t ()) -- ^ Event that message is sent
 sendComponentCreateMsg peer chan i itemId ekv = peerChanSend peer chan $
-  uncurry (encodeComponentCreateMsg i itemId) <$> ekv
+  (ReliableMessage,) . uncurry (encodeComponentCreateMsg i itemId) <$> ekv
 
 -- | Encoding high-level collection message about deletion of component
 -- to low-level network message.
@@ -85,8 +85,8 @@ encodeComponentDeleteMsg :: Store k
   => SyncId -- ^ Sync scope dynamic id
   -> SyncItemId -- ^ Sync item static id
   -> k -- ^ Component key
-  -> Message
-encodeComponentDeleteMsg i itemId k = Message ReliableMessage $ encode msg
+  -> ByteString
+encodeComponentDeleteMsg i itemId k = encode msg
   where
   msg :: RemoteCollectionMsg ByteString ByteString
   msg = RemoteComponentDelete {
@@ -97,23 +97,23 @@ encodeComponentDeleteMsg i itemId k = Message ReliableMessage $ encode msg
 
 -- | Send message about remote collection component destruction from
 -- incoming event.
-sendComponentDeleteMsg :: (LoggingMonad t m, NetworkMonad t m, Store k)
-  => Peer -- ^ Client which we are sending
-  -> ChannelID -- ^ ID of channel to use
+sendComponentDeleteMsg :: (LoggingMonad t m, NetworkMonad t b m, Store k)
+  => Peer b -- ^ Client which we are sending
+  -> ChannelId -- ^ ID of channel to use
   -> SyncId -- ^ Sync scope dynamic id
   -> SyncItemId -- ^ Sync item static id
   -> Event t k -- ^ Key of component
   -> m (Event t ()) -- ^ Event that message is sent
 sendComponentDeleteMsg peer chan i itemId ek = peerChanSend peer chan $
-  encodeComponentDeleteMsg i itemId <$> ek
+  (ReliableMessage,) . encodeComponentDeleteMsg i itemId <$> ek
 
 -- | Encoding high-level collection message about request for components
 -- to low-level network message.
 encodeComponentsRequestMsg ::
      SyncId -- ^ Sync scope dynamic id
   -> SyncItemId -- ^ Sync item static id
-  -> Message
-encodeComponentsRequestMsg i itemId = Message ReliableMessage $ encode msg
+  -> ByteString
+encodeComponentsRequestMsg i itemId = encode msg
   where
   msg :: RemoteCollectionMsg ByteString ByteString
   msg = RemoteComponentsRequest {
@@ -123,15 +123,15 @@ encodeComponentsRequestMsg i itemId = Message ReliableMessage $ encode msg
 
 -- | Send message about request for remote collection components from
 -- incoming event.
-sendComponentsRequestMsg :: (LoggingMonad t m, NetworkMonad t m)
-  => Peer -- ^ Client which we are sending
-  -> ChannelID -- ^ ID of channel to use
+sendComponentsRequestMsg :: (LoggingMonad t m, NetworkMonad t b m)
+  => Peer b -- ^ Client which we are sending
+  -> ChannelId -- ^ ID of channel to use
   -> SyncId -- ^ Sync scope dynamic id
   -> SyncItemId -- ^ Sync item static id
   -> Event t a -- ^ When to send a request message
   -> m (Event t ()) -- ^ Event that message is sent
 sendComponentsRequestMsg peer chan i itemId ek = peerChanSend peer chan $
-  const (encodeComponentsRequestMsg i itemId) <$> ek
+  (ReliableMessage,) . const (encodeComponentsRequestMsg i itemId) <$> ek
 
 -- | Decoding high-level remote collection message from bytestring received
 -- from network module.

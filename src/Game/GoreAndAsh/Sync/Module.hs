@@ -42,7 +42,7 @@ globalSyncName :: SyncName
 globalSyncName = ""
 
 -- | Internal state of core module
-data SyncEnv t = SyncEnv {
+data SyncEnv t b = SyncEnv {
   -- | Module options
   syncEnvOptions         :: SyncOptions ()
   -- | Storage of name map and next free id
@@ -50,28 +50,30 @@ data SyncEnv t = SyncEnv {
   -- | Current sync object
 , syncEnvName            :: SyncName
   -- | Store current values of send counter for each peer
-, syncEnvSendCounters    :: IORef (Map Peer Word16)
+, syncEnvSendCounters    :: IORef (Map (Peer b) Word16)
   -- | Store current values of receive counter for each peer
-, syncEnvReceiveCounters :: IORef (Map Peer Word16)
+, syncEnvReceiveCounters :: IORef (Map (Peer b) Word16)
 }
 
 -- | Creation of intial sync state
-newSyncEnv :: MonadAppHost t m => SyncOptions s -> m (SyncEnv t)
+newSyncEnv :: (MonadAppHost t m, HasNetworkBackend b) => SyncOptions s -> m (SyncEnv t b)
 newSyncEnv opts = do
   namesRef <- newExternalRef (H.singleton globalSyncName 0, 1)
   sendCounters <- liftIO $ newIORef mempty
   receiveCounters <- liftIO $ newIORef mempty
   return SyncEnv {
-    syncEnvOptions = opts & syncOptionsNext .~ ()
-  , syncEnvNames = namesRef
-  , syncEnvName = globalSyncName
-  , syncEnvSendCounters = sendCounters
-  , syncEnvReceiveCounters = receiveCounters
-  }
+      syncEnvOptions = opts & syncOptionsNext .~ ()
+    , syncEnvNames = namesRef
+    , syncEnvName = globalSyncName
+    , syncEnvSendCounters = sendCounters
+    , syncEnvReceiveCounters = receiveCounters
+    }
 
 -- | Monad transformer of synchronization core module.
 --
 -- [@t@] - FRP engine implementation, can be ignored almost everywhere.
+--
+-- [@b@] - Network transport backend (see 'NetworkT')
 --
 -- [@m@] - Next monad in modules monad stack;
 --
@@ -83,21 +85,21 @@ newSyncEnv opts = do
 -- newtype AppMonad t a = AppMonad (SyncT t (TimerT t (NetworkT t (LoggingT t (GameMonad t))))) a)
 --   deriving (Functor, Applicative, Monad, MonadFix, MonadIO, LoggingMonad, NetworkMonad, TimerMonad, SyncMonad)
 -- @
-newtype SyncT t m a = SyncT { runSyncT :: ReaderT (SyncEnv t) m a }
-  deriving (Functor, Applicative, Monad, MonadReader (SyncEnv t), MonadFix
+newtype SyncT t b m a = SyncT { runSyncT :: ReaderT (SyncEnv t b) m a }
+  deriving (Functor, Applicative, Monad, MonadReader (SyncEnv t b), MonadFix
     , MonadIO, MonadThrow, MonadCatch, MonadMask, MonadSample t, MonadHold t)
 
-instance MonadTrans (SyncT t) where
+instance MonadTrans (SyncT t b) where
   lift = SyncT . lift
 
-instance MonadReflexCreateTrigger t m => MonadReflexCreateTrigger t (SyncT t m) where
+instance MonadReflexCreateTrigger t m => MonadReflexCreateTrigger t (SyncT t b m) where
   newEventWithTrigger = lift . newEventWithTrigger
   newFanEventWithTrigger initializer = lift $ newFanEventWithTrigger initializer
 
-instance MonadSubscribeEvent t m => MonadSubscribeEvent t (SyncT t m) where
+instance MonadSubscribeEvent t m => MonadSubscribeEvent t (SyncT t b m) where
   subscribeEvent = lift . subscribeEvent
 
-instance MonadAppHost t m => MonadAppHost t (SyncT t m) where
+instance MonadAppHost t m => MonadAppHost t (SyncT t b m) where
   getFireAsync = lift getFireAsync
   getRunAppHost = do
     runner <- SyncT getRunAppHost
@@ -105,24 +107,24 @@ instance MonadAppHost t m => MonadAppHost t (SyncT t m) where
   performPostBuild_ = lift . performPostBuild_
   liftHostFrame = lift . liftHostFrame
 
-instance MonadTransControl (SyncT t) where
-  type StT (SyncT t) a = StT (ReaderT (SyncEnv t)) a
+instance MonadTransControl (SyncT t b) where
+  type StT (SyncT t b) a = StT (ReaderT (SyncEnv t b)) a
   liftWith = defaultLiftWith SyncT runSyncT
   restoreT = defaultRestoreT SyncT
 
-instance MonadBase b m => MonadBase b (SyncT t m) where
+instance MonadBase b m => MonadBase b (SyncT t backend m) where
   liftBase = SyncT . liftBase
 
-instance (MonadBaseControl b m) => MonadBaseControl b (SyncT t m) where
-  type StM (SyncT t m) a = ComposeSt (SyncT t) m a
+instance (MonadBaseControl b m) => MonadBaseControl b (SyncT t backend m) where
+  type StM (SyncT t backend m) a = ComposeSt (SyncT t backend) m a
   liftBaseWith     = defaultLiftBaseWith
   restoreM         = defaultRestoreM
 
-instance MonadResource m => MonadResource (SyncT t m) where
+instance MonadResource m => MonadResource (SyncT t b m) where
   liftResourceT = SyncT . liftResourceT
 
-instance (MonadIO (HostFrame t), NetworkMonad t m, LoggingMonad t m, TimerMonad t m, GameModule t m, MonadMask m) => GameModule t (SyncT t m) where
-  type ModuleOptions t (SyncT t m) = SyncOptions (ModuleOptions t m)
+instance (MonadIO (HostFrame t), NetworkMonad t b m, TimerMonad t m, GameModule t m, MonadMask m) => GameModule t (SyncT t b m) where
+  type ModuleOptions t (SyncT t b m) = SyncOptions (ModuleOptions t m)
 
   runModule opts m = do
     s <- newSyncEnv opts
@@ -136,7 +138,7 @@ instance (MonadIO (HostFrame t), NetworkMonad t m, LoggingMonad t m, TimerMonad 
 
   withModule t _ = withModule t (Proxy :: Proxy m)
 
-instance (MonadAppHost t m, MonadMask m, TimerMonad t m, LoggingMonad t m) => SyncMonad t (SyncT t m) where
+instance (MonadAppHost t m, MonadMask m, TimerMonad t m, LoggingMonad t m, HasNetworkBackend b) => SyncMonad t b (SyncT t b m) where
   syncOptions = asks syncEnvOptions
   {-# INLINE syncOptions #-}
   syncKnownNames = do

@@ -11,19 +11,17 @@
 module Main where
 
 import Control.Lens
-import Control.Monad.IO.Class
 import Data.Monoid
 import Game.GoreAndAsh
 import Game.GoreAndAsh.Logging
 import Game.GoreAndAsh.Network
+import Game.GoreAndAsh.Network.Backend.TCP
 import Game.GoreAndAsh.Sync
 import Game.GoreAndAsh.Time
-import Network.Socket
 import System.Environment
-import Text.Read
 
 -- | Application monad that is used for implementation of game API
-type AppMonad = SyncT Spider (TimerT Spider (NetworkT Spider (LoggingT Spider(GameMonad Spider))))
+type AppMonad = SyncT Spider TCPBackend (TimerT Spider (NetworkT Spider TCPBackend (LoggingT Spider (GameMonad Spider))))
 
 -- | ID of counter object that is same on clients and server
 counterId :: SyncItemId
@@ -31,25 +29,23 @@ counterId = 0
 
 -- Server application.
 -- The application should be generic in the host monad that is used
-appServer :: forall t m . (LoggingMonad t m, NetworkServer t m, SyncMonad t m)
-  => PortNumber -> m ()
+appServer :: forall t backend m . (LoggingMonad t m, NetworkClient t backend m, NetworkServer t backend m, SyncMonad t backend m)
+  => ServiceName -> m ()
 appServer p = do
+  loggingSetDebugFlag True
   e <- getPostBuild
-  loggingSetDebugFlag False
-  listenE <- dontCare =<< (serverListen $ ffor e $ const $ ServerListen {
-      listenAddress = SockAddrInet p 0
-    , listenMaxConns = 100
-    , listenChanns = 2
-    , listenIncoming = 0
-    , listenOutcoming = 0
-    })
-  logInfoE $ ffor listenE $ const $ "Started to listen port " <> showl p <> " ..."
+  logInfoE $ ffor e $ const $ "Started to listen port " <> showl p <> " ..."
 
   connE <- peerConnected
   logInfoE $ ffor connE $ const $ "Peer is connected..."
 
   discE <- peerDisconnected
   logInfoE $ ffor discE $ const $ "Peer is disconnected..."
+
+  someErrorE <- networkSomeError
+  sendErrorE <- networkSendError
+  logWarnE $ ffor someErrorE $ \er -> "Network error: " <> showl er
+  logWarnE $ ffor sendErrorE $ \er -> "Network send error: " <> showl er
 
   counterDyn <- makeSharedCounter
   logInfoE $ ffor (updated counterDyn) $ \n -> "Counter state: " <> showl n
@@ -68,16 +64,8 @@ appServer p = do
     _ <- syncToAllClients counterId ReliableMessage syncDyn
     return dynCnt
 
--- | Find server address by host name or IP
-resolveServer :: MonadIO m => HostName -> ServiceName -> m SockAddr
-resolveServer host serv = do
-  info <- liftIO $ getAddrInfo Nothing (Just host) (Just serv)
-  case info of
-    [] -> fail $ "Cannot resolve server address: " <> host
-    (a : _) -> return $ addrAddress a
-
 -- | Client side logic of application
-clientLogic :: (LoggingMonad t m, SyncMonad t m, NetworkClient t m) => m ()
+clientLogic :: forall t m . (LoggingMonad t m, SyncMonad t TCPBackend m, NetworkClient t TCPBackend m) => m ()
 clientLogic = do
   -- sync from server (approx each 5 seconds)
   dynCnt :: Dynamic t Int <- syncFromServer counterId 0
@@ -88,29 +76,24 @@ clientLogic = do
 
 -- Client application.
 -- The application should be generic in the host monad that is used
-appClient :: (LoggingMonad t m, SyncMonad t m, NetworkClient t m) => HostName -> ServiceName -> m ()
+appClient :: (LoggingMonad t m, SyncMonad t TCPBackend m, NetworkClient t TCPBackend m) => HostName -> ServiceName -> m ()
 appClient host serv = do
-  addr <- resolveServer host serv
   e <- getPostBuild
-  connectedE <- dontCare =<< (clientConnect $ ffor e $ const $ ClientConnect {
-      clientAddrr = addr
-    , clientChanns = 2
-    , clientIncoming = 0
-    , clientOutcoming = 0
-    })
+  let EndPointAddress addr = encodeEndPointAddress host serv 0
+  connectedE <- clientConnect $ ffor e $ const (addr, defaultConnectHints)
+  conErrorE <- networkConnectionError
   logInfoE $ ffor connectedE $ const "Connected to server!"
+  logErrorE $ ffor conErrorE $ \er -> "Failed to connect: " <> showl er
   clientLogic
 
-data Mode = Client HostName ServiceName | Server PortNumber
+data Mode = Client HostName ServiceName | Server ServiceName
 
 readArgs :: IO Mode
 readArgs = do
   args <- getArgs
   case args of
     ["client", host, serv] -> return $ Client host serv
-    ["server", ps] -> case readMaybe ps of
-      Nothing -> fail $ "Failed to parse port!"
-      Just p -> return $ Server p
+    ["server", p] -> return $ Server p
     _ -> fail $ "Expected arguments: client <host> <port> | server <port>"
 
 main :: IO ()
@@ -123,5 +106,13 @@ main = do
       opts = case mode of
         Client _ _ -> defaultSyncOptions netopts & syncOptionsRole .~ SyncSlave
         Server _ -> defaultSyncOptions netopts & syncOptionsRole .~ SyncMaster
-      netopts = (defaultNetworkOptions ()) { networkDetailedLogging = False }
+      tcpOpts = TCPBackendOpts {
+          tcpHostName = "localhost"
+        , tcpServiceName = case mode of
+             Client _ _ -> ""
+             Server port -> port
+        , tcpParameters = defaultTCPParameters
+        , tcpDuplexHints = defaultConnectHints
+        }
+      netopts = (defaultNetworkOptions tcpOpts ()) { networkOptsDetailedLogging = False }
   runSpiderHost $ hostApp $ runModule opts (app :: AppMonad ())

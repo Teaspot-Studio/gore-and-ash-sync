@@ -33,14 +33,14 @@ import Game.GoreAndAsh.Sync.Message
 import Game.GoreAndAsh.Sync.Options
 
 -- | Make collection that infroms clients about component creation/removing
-hostCollection :: forall k v v' a t m .
+hostCollection :: forall k v v' a b t m .
     ( Ord k, Store k, Store v', MonadAppHost t m
-    , NetworkServer t m, SyncMonad t m)
+    , NetworkServer t b m, SyncMonad t b m)
   => SyncItemId -- ^ ID of collection in current scope
-  -> Dynamic t (S.Set Peer) -- ^ Set of peers that are allowed to get info about collection and that receives incremental updates.
+  -> Dynamic t (S.Set (Peer b)) -- ^ Set of peers that are allowed to get info about collection and that receives incremental updates.
   -> Map k v -- ^ Initial set of components
   -> Event t (Map k (Maybe v)) -- ^ Nothing entries delete component, Just ones create or replace
-  -> (Peer -> v -> v') -- ^ Transform creation value to which is sent to remote clients
+  -> (Peer b -> v -> v') -- ^ Transform creation value to which is sent to remote clients
   -> (k -> v -> m a) -- ^ Constructor of widget
   -> m (Dynamic t (Map k a)) -- ^ Collected output of components
 hostCollection itemId peersDyn initialMap addDelMap toClientVal makeComponent = do
@@ -55,7 +55,7 @@ hostCollection itemId peersDyn initialMap addDelMap toClientVal makeComponent = 
             addRemove m k (Just v) = M.insert k v m
         return $ M.foldlWithKey' addRemove kvMap diffMap
   -- listen messages from client about the remote collections
-  msgE :: Event t (Peer, RemoteCollectionMsg k v') <- listenCollectionMsg chan i itemId
+  msgE :: Event t (Peer b, RemoteCollectionMsg k v') <- listenCollectionMsg chan i itemId
   -- filter requests for current content of collection
   let reqE = flip push msgE $ \msg -> do
         peers <- sample . current $ peersDyn
@@ -68,13 +68,13 @@ hostCollection itemId peersDyn initialMap addDelMap toClientVal makeComponent = 
   -- when client wants to know current content of send the accummulated kvMapDyn
   _ <- msgSendMany $ flip pushAlways reqE $ \peer -> do
     kvMap <- sample . current $ kvMapDyn
-    let mkMsg k v = (peer, chan, encodeComponentCreateMsg i itemId k $ toClientVal peer v)
+    let mkMsg k v = (peer, chan, ReliableMessage, encodeComponentCreateMsg i itemId k $ toClientVal peer v)
     return $ M.mapWithKey mkMsg kvMap
   -- send deletion and incremental addition of elements
   let updMsgsE = flip pushAlways addDelMap $ \m -> do
         peers <- sample . current $ peersDyn
-        let makeMsg peer k Nothing  = (peer, chan, encodeComponentDeleteMsg i itemId k)
-            makeMsg peer k (Just v) = (peer, chan, encodeComponentCreateMsg i itemId k $ toClientVal peer v)
+        let makeMsg peer k Nothing  = (peer, chan, ReliableMessage, encodeComponentDeleteMsg i itemId k)
+            makeMsg peer k (Just v) = (peer, chan, ReliableMessage, encodeComponentCreateMsg i itemId k $ toClientVal peer v)
         return $ flip F.foldMap peers $ \peer -> M.elems $ M.mapWithKey (makeMsg peer) m
   _ <- msgSendMany updMsgsE
   -- local collection
@@ -84,9 +84,9 @@ hostCollection itemId peersDyn initialMap addDelMap toClientVal makeComponent = 
 --
 -- Simplified version of 'hostCollection' which doesn't provide control
 -- over peers and start value projection for clients.
-hostSimpleCollection :: forall k v a t m .
+hostSimpleCollection :: forall k v a b t m .
     ( Ord k, Store k, Store v, MonadAppHost t m
-    , NetworkServer t m, SyncMonad t m)
+    , NetworkServer t b m, SyncMonad t b m)
   => SyncItemId -- ^ ID of collection in current scope
   -> Map k v -- ^ Initial set of components
   -> Event t (Map k (Maybe v)) -- ^ Nothing entries delete component, Just ones create or replace
@@ -98,7 +98,7 @@ hostSimpleCollection itemId initialMap updatesE makeComponent = do
 
 -- | Make a client-side version of 'hostCollection' receive messages when
 -- server adds-removes components and mirror them localy by local component.
-remoteCollection :: (Ord k, Store k, Store v, MonadAppHost t m, NetworkClient t m, SyncMonad t m)
+remoteCollection :: (Ord k, Store k, Store v, MonadAppHost t m, NetworkClient t b m, SyncMonad t b m)
   => SyncItemId -- ^ ID of collection in current scope
   -> (k -> v -> m a) -- ^ Contructor of client widget
   -> m (Dynamic t (Map k a))
@@ -111,7 +111,7 @@ remoteCollection itemId makeComponent = fmap join $ whenConnected (pure mempty) 
   fmap join $ resolveSyncName server name (pure mempty) $ \i -> do
     -- at creation send request to server for full list of items
     buildE <- getPostBuild
-    let reqMsgE = const (encodeComponentsRequestMsg i itemId) <$> buildE
+    let reqMsgE = const (ReliableMessage, encodeComponentsRequestMsg i itemId) <$> buildE
     _ <- peerChanSend server chan reqMsgE
     -- listen to server messages
     msgE <- listenPeerCollectionMsg server chan i itemId
@@ -123,11 +123,11 @@ remoteCollection itemId makeComponent = fmap join $ whenConnected (pure mempty) 
     holdKeyCollection mempty updMapE makeComponent
 
 -- | Listen for collection message
-listenCollectionMsg :: (NetworkMonad t m, LoggingMonad t m, Store k, Store v)
-  => ChannelID -- ^ Channel that is used for collection messages
+listenCollectionMsg :: (NetworkMonad t b m, Store k, Store v)
+  => ChannelId -- ^ Channel that is used for collection messages
   -> SyncId -- ^ ID of scope
   -> SyncItemId -- ^ ID of item in scope
-  -> m (Event t (Peer, RemoteCollectionMsg k v))
+  -> m (Event t (Peer b, RemoteCollectionMsg k v))
 listenCollectionMsg chan i itemId = do
   e <- networkMessage
   let e' = fforMaybe e $ \(peer, chan', bs) -> if chan == chan'
@@ -137,9 +137,9 @@ listenCollectionMsg chan i itemId = do
   logEitherWarn $ first printDecodeError <$> e'
 
 -- | Listen for collection messages from particular peer
-listenPeerCollectionMsg :: (NetworkMonad t m, LoggingMonad t m, Store k, Store v)
-  => Peer -- ^ Peer that is listened
-  -> ChannelID -- ^ Channel that is used for collection messages
+listenPeerCollectionMsg :: (NetworkMonad t b m, Store k, Store v)
+  => Peer b -- ^ Peer that is listened
+  -> ChannelId -- ^ Channel that is used for collection messages
   -> SyncId -- ^ ID of scoped
   -> SyncItemId -- ^ ID of sync object
   -> m (Event t (RemoteCollectionMsg k v))

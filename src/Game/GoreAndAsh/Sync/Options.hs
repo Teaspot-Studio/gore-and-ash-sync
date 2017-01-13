@@ -21,7 +21,7 @@ module Game.GoreAndAsh.Sync.Options(
 
 import Control.Lens (makeLenses)
 import Data.Time
-import Game.GoreAndAsh.Network (ChannelID)
+import Game.GoreAndAsh.Network (ChannelId(..))
 import GHC.Generics
 
 -- | Defines internal strategy of synchronization, whether the node is
@@ -38,11 +38,11 @@ data SyncOptions s = SyncOptions {
   -- | Network channel to use for synchronization messages
   --
   -- Note: that option must be the same for all nodes.
-, _syncOptionsChannel            :: ChannelID
+, _syncOptionsChannel            :: ChannelId
   -- | Network channel to use for synchronization of remote collections.
   --
   -- Note: that option must be the same for all nodes.
-, _syncOptionsCollectionsChannel :: ChannelID
+, _syncOptionsCollectionsChannel :: ChannelId
   -- | Delays between messages for resolving a name of sync object
 , _syncOptionsResolveDelay       :: NominalDiffTime
   -- | Options of next underlying module
@@ -56,8 +56,8 @@ makeLenses ''SyncOptions
 -- @
 -- SyncOptions {
 --   _syncOptionsRole = SyncSlave
--- , _syncOptionsChannel = fromIntegral 1
--- , _syncOptionsCollectionsChannel = fromIntegral 2
+-- , _syncOptionsChannel = ChannelId 1
+-- , _syncOptionsCollectionsChannel = ChannelId 2
 -- , _syncOptionsResolveDelay = realToFrac (5 :: Double)
 -- , _syncOptionsNext = s
 -- }
@@ -65,8 +65,8 @@ makeLenses ''SyncOptions
 defaultSyncOptions :: s -> SyncOptions s
 defaultSyncOptions s = SyncOptions {
     _syncOptionsRole = SyncSlave
-  , _syncOptionsChannel = fromIntegral (1 :: Int)
-  , _syncOptionsCollectionsChannel = fromIntegral (2 :: Int)
+  , _syncOptionsChannel = ChannelId 1
+  , _syncOptionsCollectionsChannel = ChannelId 2
   , _syncOptionsResolveDelay = realToFrac (5 :: Double)
   , _syncOptionsNext = s
   }

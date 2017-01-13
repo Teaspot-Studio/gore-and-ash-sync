@@ -23,7 +23,6 @@ module Game.GoreAndAsh.Sync.Message(
 import Data.Store
 import Data.Word
 import GHC.Generics
-import Game.GoreAndAsh.Network.Message
 import Data.ByteString (ByteString)
 
 -- | Defines unique name of synchronization object so nodes
@@ -82,20 +81,20 @@ data SyncServiceMessage =
 instance Store SyncServiceMessage
 
 -- | Convert sync message into message of underlying network module
-encodeSyncMessage :: Store a => MessageType -> SyncId -> SyncItemId -> Word16 -> a -> Message
-encodeSyncMessage mt i ii c a = Message mt (encode $ SyncPayloadMessage i ii c $ encode a)
+encodeSyncMessage :: Store a => SyncId -> SyncItemId -> Word16 -> a -> ByteString
+encodeSyncMessage i ii c a = encode $ SyncPayloadMessage i ii c $ encode a
 
 -- | Convert sync message into message of underlying network module
-encodeSyncCommand :: Store a => MessageType -> SyncId -> SyncItemId -> a -> Message
-encodeSyncCommand mt i ii a = Message mt (encode $ SyncCommandMessage i ii $ encode a)
+encodeSyncCommand :: Store a => SyncId -> SyncItemId -> a -> ByteString
+encodeSyncCommand i ii a = encode $ SyncCommandMessage i ii $ encode a
 
 -- | Convert sync message into message of underlying network module
-encodeSyncRequest :: MessageType -> SyncId -> SyncItemId -> Message
-encodeSyncRequest mt i ii = Message mt (encode $ SyncRequestMessage i ii)
+encodeSyncRequest :: SyncId -> SyncItemId -> ByteString
+encodeSyncRequest i ii = encode $ SyncRequestMessage i ii
 
 -- | Helper for encoding service messages
-encodeSyncServiceMsg :: MessageType -> SyncServiceMessage -> Message
-encodeSyncServiceMsg mt smsg = Message mt (encode $ SyncServiceMessage smsg)
+encodeSyncServiceMsg :: SyncServiceMessage -> ByteString
+encodeSyncServiceMsg smsg = encode $ SyncServiceMessage smsg
 
 -- | Convert received payload to sync message
 decodeSyncMessage :: ByteString -> Either PeekException SyncMessage
