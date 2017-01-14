@@ -167,6 +167,13 @@ instance (MonadAppHost t m, MonadMask m, TimerMonad t m, LoggingMonad t m, HasNe
       state' = names' `seq` i' `seq` (names', i')
       in (state', ())
   {-# INLINE syncUnsafeAddId #-}
+  syncUnsafeDelId name = do
+    namesRef <- asks syncEnvNames
+    modifyExternalRef namesRef $ \(names, localI) -> let
+      names' = H.delete name names
+      state = names' `seq` (names', localI)
+      in (state, ())
+  {-# INLINE syncUnsafeDelId #-}
 
   syncIncSendCounter p = do
     ref <- asks syncEnvSendCounters

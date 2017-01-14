@@ -18,6 +18,8 @@ module Game.GoreAndAsh.Sync.API(
   , conditional
   , syncWithNameWith
   , syncWithName
+  , syncUnregisterName
+  , syncUnregisterNames
   -- ** Server side
   , syncToClientManual
   , syncToClient
@@ -72,9 +74,6 @@ import qualified Data.Foldable as F
 import qualified Data.HashMap.Strict as H
 import qualified Data.Map.Strict as M
 
--- TODO, what is left to finish the module:
--- 1. Remote collections.
-
 -- | Bijection between name and id of synchronized object
 type NameMap = H.HashMap SyncName SyncId
 
@@ -102,6 +101,9 @@ class (MonadAppHost t m, TimerMonad t m, LoggingMonad t m, MonadMask m)
     --
     -- Used by client to register id requested from server.
     syncUnsafeAddId :: SyncName -> SyncId -> m ()
+    -- | Forget about given sync name to free memory when sync object is not
+    -- neded anymore.
+    syncUnsafeDelId :: SyncName -> m ()
 
     -- | Increase per peer message counter and return its value
     syncIncSendCounter :: Peer b -> m Word16
@@ -138,6 +140,22 @@ syncWithName :: (SyncMonad t b m, NetworkClient t b m)
   -> m (Dynamic t a) -- ^ Result of scope execution
 syncWithName name a0 = syncWithNameWith name (pure a0)
 
+-- | Delete synchronisation name by event
+syncUnregisterName :: (SyncMonad t b m)
+  => Event t SyncName -- ^ Fires when you want to delete a synchronization object
+  -> m (Event t SyncName) -- ^ Return the event that fires after deletion of given name
+syncUnregisterName e = performAppHost $ ffor e $ \name -> do
+  syncUnsafeDelId name
+  return name
+
+-- | Delete synchronisation name by event
+syncUnregisterNames :: (SyncMonad t b m, Foldable f)
+  => Event t (f SyncName) -- ^ Fires when you want to delete a batch of synchronization objects
+  -> m (Event t (f SyncName)) -- ^ Return the event that fires after deletion of given names
+syncUnregisterNames e = performAppHost $ ffor e $ \names -> do
+  mapM_ syncUnsafeDelId names
+  return names
+
 instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), MonadMask (mt m), MonadTransControl mt, SyncMonad t b m, TimerMonad t m, LoggingMonad t m)
   => SyncMonad t b (mt m) where
     syncOptions = lift syncOptions
@@ -154,6 +172,8 @@ instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), MonadMask (mt m), MonadTra
     {-# INLINE syncUnsafeRegId #-}
     syncUnsafeAddId a b = lift $ syncUnsafeAddId a b
     {-# INLINE syncUnsafeAddId #-}
+    syncUnsafeDelId a = lift $ syncUnsafeDelId a
+    {-# INLINE syncUnsafeDelId #-}
     syncIncSendCounter p = lift $ syncIncSendCounter p
     {-# INLINE syncIncSendCounter #-}
     syncCheckReceiveCounter p c = lift $ syncCheckReceiveCounter p c

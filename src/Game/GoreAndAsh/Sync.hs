@@ -38,6 +38,8 @@ module Game.GoreAndAsh.Sync(
   , conditional
   , syncWithNameWith
   , syncWithName
+  , syncUnregisterName
+  , syncUnregisterNames
   -- ** Server side
   , syncToClientManual
   , syncToClient
