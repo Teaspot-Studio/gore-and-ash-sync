@@ -101,14 +101,15 @@ hostSimpleCollection itemId initialMap updatesE makeComponent = do
 remoteCollection :: (Ord k, Store k, Store v, MonadAppHost t m, NetworkClient t b m, SyncMonad t b m)
   => SyncItemId -- ^ ID of collection in current scope
   -> (k -> v -> m a) -- ^ Contructor of client widget
-  -> m (Dynamic t (Map k a))
-remoteCollection itemId makeComponent = fmap join $ whenConnected (pure mempty) $ \server -> do
+  -- | Returns resulted collected outputs from components and update map.
+  -> m (Dynamic t (Map k a), Event t (Map k (Maybe v)))
+remoteCollection itemId makeComponent = fmap joinPair $ whenConnected (pure mempty) $ \server -> do
   -- read options
   opts <- syncOptions
   let chan = opts ^. syncOptionsCollectionsChannel
   -- resolve scope
   name <- syncCurrentName
-  fmap join $ resolveSyncName server name (pure mempty) $ \i -> do
+  fmap joinPair $ resolveSyncName server name (pure mempty) $ \i -> do
     -- at creation send request to server for full list of items
     buildE <- getPostBuild
     let reqMsgE = const (ReliableMessage, encodeComponentsRequestMsg i itemId) <$> buildE
@@ -120,7 +121,10 @@ remoteCollection itemId makeComponent = fmap join $ whenConnected (pure mempty) 
           RemoteComponentDelete{..} -> Just $ M.singleton remoteComponentKey Nothing
           _ -> Nothing
     -- local collection
-    holdKeyCollection mempty updMapE makeComponent
+    cmpsDyn <- holdKeyCollection mempty updMapE makeComponent
+    return (cmpsDyn, updMapE)
+  where
+    joinPair dp = (join $ fst <$> dp, switchPromptlyDyn $ snd <$> dp)
 
 -- | Listen for collection message
 listenCollectionMsg :: (NetworkMonad t b m, Store k, Store v)

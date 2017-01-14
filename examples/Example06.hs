@@ -107,7 +107,7 @@ appServer p = do
 -- | Client side logic of application
 clientLogic :: forall t m . (LoggingMonad t m, SyncMonad t TCPBackend m, NetworkClient t TCPBackend m) => m ()
 clientLogic = do
-  countersMapDyn <- remoteCollection collectionId makeSharedCounter
+  (countersMapDyn, _) <- remoteCollection collectionId makeSharedCounter
   let countersDyn = flattenCountersMap =<< countersMapDyn
   logInfoE $ ffor (updated $ uniqDyn countersDyn) $ \ns -> "Counters state: " <> showl ns
   where
