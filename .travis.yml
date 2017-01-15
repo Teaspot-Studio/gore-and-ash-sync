@@ -24,6 +24,10 @@ addons:
   apt:
     packages:
       - libgmp-dev
+      - libsdl2-dev
+      - libsdl2-image-dev
+    sources:
+      - sourceline: 'ppa:zoogie/sdl2-snapshots'
 
 before_install:
 # Download and unpack the stack executable
@@ -33,6 +37,7 @@ before_install:
 
 install:
 # Build dependencies
+- stack install alex happy
 - stack --no-terminal --install-ghc test --only-dependencies
 
 script:
