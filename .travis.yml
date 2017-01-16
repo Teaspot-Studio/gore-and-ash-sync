@@ -38,8 +38,8 @@ before_install:
 install:
 # Build dependencies
 - stack install alex happy --install-ghc
-- stack --no-terminal --install-ghc test --only-dependencies -j 1 --ghc-opt "+RTS -M2000m"
+- stack --no-terminal --install-ghc test --only-dependencies -j 1 --ghc-options "+RTS -M2000m"
 
 script:
 # Build the package, its tests, and its docs and run the tests
-- stack --ghc-opt "+RTS -M2000m" --no-terminal test --haddock --no-haddock-deps --flag gore-and-ash-sync:examples --pedantic -j 1
+- stack --ghc-options "+RTS -M2000m" --no-terminal test --haddock --no-haddock-deps --flag gore-and-ash-sync:examples --pedantic -j 1
