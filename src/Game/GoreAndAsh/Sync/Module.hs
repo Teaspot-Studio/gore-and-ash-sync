@@ -1,7 +1,6 @@
-{-# OPTIONS_GHC -fno-warn-orphans #-}
 {-|
 Module      : Game.GoreAndAsh.Sync.Module
-Description : Monad transformer and game module instance
+Description : Implementation of synchronization module
 Copyright   : (c) Anton Gushcha, 2015-2016
 License     : BSD3
 Maintainer  : ncrashed@gmail.com
@@ -9,37 +8,72 @@ Stability   : experimental
 Portability : POSIX
 -}
 module Game.GoreAndAsh.Sync.Module(
-    SyncT(..)
-  , registerSyncIdInternal
-  , addSyncTypeRepInternal
-  , syncRequestIdInternal
-  , getServiceChannel
-  , syncLog
+    SyncT
+  , globalSyncName
   ) where
 
+import Control.Lens ((&), (.~), (^.))
+import Control.Monad.Base
 import Control.Monad.Catch
-import Control.Monad.Fix
-import Control.Monad.State.Strict
-import Data.Maybe
-import Data.Monoid
+import Control.Monad.Except
+import Control.Monad.Reader
+import Control.Monad.Trans.Control
+import Control.Monad.Trans.Resource
+import Data.IORef
+import Data.Map.Strict (Map)
 import Data.Proxy
-import Data.Serialize
-import Data.Text (Text, pack)
 import Data.Word
-import qualified Data.ByteString as BS
-import qualified Data.HashMap.Strict as H
-import qualified Data.Sequence as S
-
 import Game.GoreAndAsh
-import Game.GoreAndAsh.Actor
-import Game.GoreAndAsh.Actor.TypeRep
 import Game.GoreAndAsh.Logging
 import Game.GoreAndAsh.Network
-import Game.GoreAndAsh.Sync.State
+import Game.GoreAndAsh.Sync.API
+import Game.GoreAndAsh.Sync.Message
+import Game.GoreAndAsh.Sync.Options
+import Game.GoreAndAsh.Time
 
--- | Monad transformer of sync core module.
+import qualified Data.HashMap.Strict as H
+import qualified Data.Map.Strict as M
+
+-- | Name of global scope for synchronisation that is created
+-- by default.
 --
--- [@s@] - State of next core module in modules chain;
+-- You should never redefine this scope!
+globalSyncName :: SyncName
+globalSyncName = ""
+
+-- | Internal state of core module
+data SyncEnv t b = SyncEnv {
+  -- | Module options
+  syncEnvOptions         :: SyncOptions ()
+  -- | Storage of name map and next free id
+, syncEnvNames           :: ExternalRef t (NameMap, SyncId)
+  -- | Current sync object
+, syncEnvName            :: SyncName
+  -- | Store current values of send counter for each peer
+, syncEnvSendCounters    :: IORef (Map (Peer b) Word16)
+  -- | Store current values of receive counter for each peer
+, syncEnvReceiveCounters :: IORef (Map (Peer b) Word16)
+}
+
+-- | Creation of intial sync state
+newSyncEnv :: (MonadAppHost t m, HasNetworkBackend b) => SyncOptions s -> m (SyncEnv t b)
+newSyncEnv opts = do
+  namesRef <- newExternalRef (H.singleton globalSyncName 0, 1)
+  sendCounters <- liftIO $ newIORef mempty
+  receiveCounters <- liftIO $ newIORef mempty
+  return SyncEnv {
+      syncEnvOptions = opts & syncOptionsNext .~ ()
+    , syncEnvNames = namesRef
+    , syncEnvName = globalSyncName
+    , syncEnvSendCounters = sendCounters
+    , syncEnvReceiveCounters = receiveCounters
+    }
+
+-- | Monad transformer of synchronization core module.
+--
+-- [@t@] - FRP engine implementation, can be ignored almost everywhere.
+--
+-- [@b@] - Network transport backend (see 'NetworkT')
 --
 -- [@m@] - Next monad in modules monad stack;
 --
@@ -48,176 +82,114 @@ import Game.GoreAndAsh.Sync.State
 -- How to embed module:
 --
 -- @
--- type AppStack = ModuleStack [LoggingT, NetworkT, ActorT, SyncT, ... other modules ... ] IO
---
--- -- | Current GHC (7.10.3) isn't able to derive this
--- instance SyncMonad AppMonad where
---   getSyncIdM = AppMonad . getSyncIdM
---   getSyncTypeRepM = AppMonad . getSyncTypeRepM
---   registerSyncIdM = AppMonad . registerSyncIdM
---   addSyncTypeRepM a b = AppMonad $ addSyncTypeRepM a b
---   syncScheduleMessageM peer ch i mt msg  = AppMonad $ syncScheduleMessageM peer ch i mt msg
---   syncSetLoggingM = AppMonad . syncSetLoggingM
---   syncSetRoleM = AppMonad . syncSetRoleM
---   syncGetRoleM = AppMonad syncGetRoleM
---   syncRequestIdM a b = AppMonad $ syncRequestIdM a b
---
--- newtype AppMonad a = AppMonad (AppStack a)
---   deriving (Functor, Applicative, Monad, MonadFix, MonadIO, LoggingMonad, MonadThrow, MonadCatch, NetworkMonad, ActorMonad)
+-- newtype AppMonad t a = AppMonad (SyncT t (TimerT t (NetworkT t (LoggingT t (GameMonad t))))) a)
+--   deriving (Functor, Applicative, Monad, MonadFix, MonadIO, LoggingMonad, NetworkMonad, TimerMonad, SyncMonad)
 -- @
---
--- The module is NOT pure within first phase (see 'ModuleStack' docs), therefore currently only 'IO' end monad can handler the module.
-newtype SyncT s m a = SyncT { runSyncT :: StateT (SyncState s) m a }
-  deriving (Functor, Applicative, Monad, MonadState (SyncState s), MonadFix, MonadTrans, MonadIO, MonadThrow, MonadCatch, MonadMask)
+newtype SyncT t b m a = SyncT { runSyncT :: ReaderT (SyncEnv t b) m a }
+  deriving (Functor, Applicative, Monad, MonadReader (SyncEnv t b), MonadFix
+    , MonadIO, MonadThrow, MonadCatch, MonadMask, MonadSample t, MonadHold t)
 
-instance (NetworkMonad m, LoggingMonad m, ActorMonad m, GameModule m s) => GameModule (SyncT s m) (SyncState s) where
-  type ModuleState (SyncT s m) = SyncState s
-  runModule (SyncT m) s = do
-    ((a, s'), nextState) <- runModule runCurrentModule (syncNextState s)
-    return (a, s' {
-        syncNextState = nextState
-      })
+instance MonadTrans (SyncT t b) where
+  lift = SyncT . lift
+
+instance MonadReflexCreateTrigger t m => MonadReflexCreateTrigger t (SyncT t b m) where
+  newEventWithTrigger = lift . newEventWithTrigger
+  newFanEventWithTrigger initializer = lift $ newFanEventWithTrigger initializer
+
+instance MonadSubscribeEvent t m => MonadSubscribeEvent t (SyncT t b m) where
+  subscribeEvent = lift . subscribeEvent
+
+instance MonadAppHost t m => MonadAppHost t (SyncT t b m) where
+  getFireAsync = lift getFireAsync
+  getRunAppHost = do
+    runner <- SyncT getRunAppHost
+    return $ \m -> runner $ runSyncT m
+  performPostBuild_ = lift . performPostBuild_
+  liftHostFrame = lift . liftHostFrame
+
+instance MonadTransControl (SyncT t b) where
+  type StT (SyncT t b) a = StT (ReaderT (SyncEnv t b)) a
+  liftWith = defaultLiftWith SyncT runSyncT
+  restoreT = defaultRestoreT SyncT
+
+instance MonadBase b m => MonadBase b (SyncT t backend m) where
+  liftBase = SyncT . liftBase
+
+instance (MonadBaseControl b m) => MonadBaseControl b (SyncT t backend m) where
+  type StM (SyncT t backend m) a = ComposeSt (SyncT t backend) m a
+  liftBaseWith     = defaultLiftBaseWith
+  restoreM         = defaultRestoreM
+
+instance MonadResource m => MonadResource (SyncT t b m) where
+  liftResourceT = SyncT . liftResourceT
+
+instance (MonadIO (HostFrame t), NetworkMonad t b m, TimerMonad t m, GameModule t m, MonadMask m) => GameModule t (SyncT t b m) where
+  type ModuleOptions t (SyncT t b m) = SyncOptions (ModuleOptions t m)
+
+  runModule opts m = do
+    s <- newSyncEnv opts
+    a <- runModule (opts ^. syncOptionsNext) (runReaderT (runSyncT m') s)
+    return a
     where
-    runCurrentModule = do
-      (a, s') <- runStateT m s
-      s'' <- processServiceMessages s'
-      return (a, s'')
+      m' = do
+        a <- m
+        syncService
+        return a
 
-  newModuleState = emptySyncState <$> newModuleState
-  withModule _ = withModule (Proxy :: Proxy m)
-  cleanupModule _ = return ()
+  withModule t _ = withModule t (Proxy :: Proxy m)
 
--- | Detect service messages arrived to the machine and process them
---
--- Note: service channel had id 1 by default, but if there is no such
--- channel, it fallbacks to 0. Make shure that client and server has corresponding
--- count of channels.
-processServiceMessages :: forall m s . (ActorMonad m, NetworkMonad m, LoggingMonad m)
-  => SyncState s -> m (SyncState s)
-processServiceMessages sstate = do
-  serviceChan <- getServiceChannel
-  peers <- networkPeersM
-  foldM (process serviceChan) sstate peers
-  where
-  -- | Process one peer
-  process :: ChannelID -> SyncState s -> Peer -> m (SyncState s)
-  process serviceChan s peer = do
-    bss <- peerMessagesM peer serviceChan
-    let serviceMsgs = catMaybesSeq . fmap decodeService $ bss
-    foldM (processService serviceChan peer) s serviceMsgs
-
-  -- | Decode service message
-  decodeService bs = case decode bs of
-    Left _ -> Nothing
-    Right (w64 :: Word64, mbs :: BS.ByteString) -> if w64 == 0
-      then case decode mbs of
-        Left _ -> Nothing
-        Right !msg -> Just msg
-      else Nothing
-
-  -- | Service one service message for given peer
-  processService :: ChannelID -> Peer -> SyncState s -> SyncServiceMsg -> m (SyncState s)
-  processService serviceChan peer s serviceMsg = case serviceMsg of
-    SyncServiceRequestId aname -> do
-      syncLog s $ "Received request for network id for actor " <> pack aname
-      marep <- findActorTypeRepM aname
-      case marep of
-        Nothing -> do
-          syncLog s "Such actor isn't known"
-          sendService peer serviceChan $ SyncServiceResponseNotRegistered aname
-          return s
-        Just arep -> case H.lookup arep . syncIdMap $ s of
-          Nothing -> do
-            syncLog s "Registering actor network id, sending"
-            let (w64, s') = registerSyncIdInternal arep s
-            sendService peer serviceChan $ SyncServiceResponseId aname w64
-            return s'
-          Just w64 -> do
-            syncLog s "Known actor id, sending"
-            sendService peer serviceChan $ SyncServiceResponseId aname w64
-            return s
-    SyncServiceResponseId aname w64 -> do
-      syncLog s $ "Received response for network id for actor " <> pack aname <> " and id " <> pack (show w64)
-      marep <- findActorTypeRepM aname
-      case marep of
-        Nothing -> do
-          syncLog s "Not known actor, ignoring"
-          return s
-        Just arep -> do
-          syncLog s "Sending all scheduled messages"
-          let s' = addSyncTypeRepInternal arep w64 s
-              msgs = fromMaybe S.empty . H.lookup peer . syncScheduledMessages $! s'
-          sheduled <- fmap catMaybesSeq . forM msgs $ \(aname', chan, msg) -> if aname == aname'
-            then do
-              peerSendM peer chan . msg $! w64
-              return Nothing
-            else return $! Just (aname', chan, msg)
-
-          let sended = S.length msgs - S.length sheduled
-          syncLog s $ "Sended: " <> pack (show sended)
-
-          return $! s' {
-              syncScheduledMessages = H.insert peer sheduled . syncScheduledMessages $! s'
-            }
-    SyncServiceResponseNotRegistered aname -> do
-      putMsgLnM LogError $ "Sync module: Failed to resolve actor id with name " <> (pack aname)
-      return s
-
--- | Helper for sending service messages
-sendService :: (NetworkMonad m, LoggingMonad m) => Peer -> ChannelID -> SyncServiceMsg -> m ()
-sendService peer chanid msg = do
-  let msg' = encode (0 :: Word64, encode msg)
-  peerSendM peer chanid . Message ReliableMessage $ msg'
-
--- | catMaybes for sequences
-catMaybesSeq :: S.Seq (Maybe a) -> S.Seq a
-catMaybesSeq = fmap fromJust . S.filter isJust
-
--- | Internal implementation of actor registrarion when monadic context isn't in scope
-registerSyncIdInternal :: HashableTypeRep -> SyncState s -> (Word64, SyncState s)
-registerSyncIdInternal tr sstate = case H.lookup tr . syncIdMap $! sstate of
-  Just !i -> (i, sstate)
-  Nothing -> (i, sstate {
-        syncIdMap = H.insert tr i . syncIdMap $! sstate
-      , syncIdMapRev = H.insert i tr . syncIdMapRev $! sstate
-      , syncNextId = i+1
-      })
+instance (MonadAppHost t m, MonadMask m, TimerMonad t m, LoggingMonad t m, HasNetworkBackend b) => SyncMonad t b (SyncT t b m) where
+  syncOptions = asks syncEnvOptions
+  {-# INLINE syncOptions #-}
+  syncKnownNames = do
+    dynVar <- externalRefDynamic =<< asks syncEnvNames
+    return $ fst <$> dynVar
+  {-# INLINE syncKnownNames #-}
+  syncCurrentName = asks syncEnvName
+  {-# INLINE syncCurrentName #-}
+  syncScopeName name (SyncT ma) = SyncT $ withReaderT setName ma
     where
-      !i = findNextEmptyId sstate $ syncNextId sstate
-  where
-    findNextEmptyId ss i = case H.lookup i .syncIdMapRev $! ss of
-      Nothing -> i
-      Just _ -> findNextEmptyId ss (i+1)
+      setName e = e { syncEnvName = name }
+  {-# INLINE syncScopeName #-}
+  syncUnsafeRegId name = do
+    namesRef <- asks syncEnvNames
+    modifyExternalRef namesRef $ \(names, i) -> let
+      names' = H.insert name i names
+      i' = i + 1
+      state' = names' `seq` i' `seq` (names', i')
+      in (state', i)
+  {-# INLINE syncUnsafeRegId #-}
+  syncUnsafeAddId name i = do
+    namesRef <- asks syncEnvNames
+    modifyExternalRef namesRef $ \(names, localI) -> let
+      names' = H.insert name i names
+      i' = i `max` localI
+      state' = names' `seq` i' `seq` (names', i')
+      in (state', ())
+  {-# INLINE syncUnsafeAddId #-}
+  syncUnsafeDelId name = do
+    namesRef <- asks syncEnvNames
+    modifyExternalRef namesRef $ \(names, localI) -> let
+      names' = H.delete name names
+      state = names' `seq` (names', localI)
+      in (state, ())
+  {-# INLINE syncUnsafeDelId #-}
 
--- | Internal implementation of actor registrarion when monadic context isn't in scope
-addSyncTypeRepInternal :: HashableTypeRep -> Word64 -> SyncState s -> SyncState s
-addSyncTypeRepInternal !tr !i sstate = case H.lookup i . syncIdMapRev $! sstate of
-  Just _ -> sstate
-  Nothing -> sstate {
-      syncIdMap = H.insert tr i . syncIdMap $! sstate
-    , syncIdMapRev = H.insert i tr . syncIdMapRev $! sstate
-    }
+  syncIncSendCounter p = do
+    ref <- asks syncEnvSendCounters
+    liftIO $ atomicModifyIORef' ref $ \m -> case M.lookup p m of
+      Nothing -> (M.insert p 1 m, 0)
+      Just c  -> if c == maxBound
+        then (M.insert p 1 m, 0)
+        else (M.insert p (c+1) m, c)
+  {-# INLINE syncIncSendCounter #-}
 
--- | Internal implementation of sending service request for actor net id
-syncRequestIdInternal :: forall proxy i m s . (ActorMonad m, NetworkMonad m, LoggingMonad m, NetworkMessage i)
-    => Peer -> proxy i -> SyncState s -> m (SyncState s)
-syncRequestIdInternal peer p s = do
-  chan <- getServiceChannel
-  registerActorTypeRepM p
-  sendService peer chan $ SyncServiceRequestId $ show $ actorFingerprint p
-  return s
-
--- | Return channel id 1 if network module has more than 1 channel, either fallback to 0
---
--- Note: If you open more than one channel,
--- the module would use chanel id 1 as service channel, therefore count of channels
--- on client and server should match (server won't response on channel 1 if it doesn't
--- have it).
-getServiceChannel :: NetworkMonad m => m ChannelID
-getServiceChannel = do
-  maxi <- networkChannels
-  return . ChannelID $! if maxi > 1 then 1 else 0
-
--- | Log only when flag is turned on
-syncLog :: LoggingMonad m => SyncState s -> Text -> m ()
-syncLog SyncState{..} = when syncLogging . putMsgLnM LogInfo . ("Sync module: " <>)
+  syncCheckReceiveCounter p c = do
+    ref <- asks syncEnvReceiveCounters
+    liftIO $ atomicModifyIORef' ref $ \m -> case M.lookup p m of
+      Nothing -> (M.insert p c m, True)
+      Just c' -> let
+        maxc = max c c'
+        next = if maxc == maxBound then 0 else maxc
+        in if c >= c' then (M.insert p next m, True) else (m, False)
+  {-# INLINE syncCheckReceiveCounter #-}
