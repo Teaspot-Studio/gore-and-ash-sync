@@ -1,5 +1,5 @@
 name:                gore-and-ash-sync
-version:             2.0.0.0
+version:             2.0.1.0
 synopsis:            Gore&Ash module for high level network synchronization
 description:         Please see README.md
 homepage:            https://github.com/Teaspot-Studio/gore-and-ash-sync
@@ -49,7 +49,7 @@ library
    , monad-control            >= 1.0      && < 1.1
    , mtl                      >= 2.2      && < 2.3
    , resourcet                >= 1.1      && < 1.2
-   , store                    >= 0.2      && < 0.3
+   , store                    >= 0.2      && < 0.5
    , time                     >= 1.6      && < 1.7
    , transformers-base        >= 0.4      && < 0.5
    , unordered-containers     >= 0.2      && < 0.3
