@@ -577,7 +577,7 @@ receiveFromClients :: forall t m a b f . (SyncMonad t b m, NetworkServer t b m, 
   -- ^ Collected state for each Peer.
 receiveFromClients peersDyn itemId = do
   switchE <- dynAppHost $ go <$> peersDyn
-  switchPromptly never switchE
+  switchHold never switchE
   where
     go :: f (Peer b) -> m (Event t (Map (Peer b) a))
     go peers = do
