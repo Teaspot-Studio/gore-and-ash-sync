@@ -21,7 +21,7 @@ import Game.GoreAndAsh.Time
 import System.Environment
 
 -- | Application monad that is used for implementation of game API
-type AppMonad = SyncT Spider TCPBackend (TimerT Spider (NetworkT Spider TCPBackend (LoggingT Spider (GameMonad Spider))))
+type AppMonad = SyncT Spider TCPBackend (NetworkT Spider TCPBackend (LoggingT Spider GMSpider))
 
 -- | ID of counter object that is same on clients and server
 counterId :: SyncItemId
@@ -72,7 +72,8 @@ clientLogic = do
   -- try to predict counter in between updates
   tickE <- tickEvery (realToFrac (1 :: Double))
   dynCnt' <- predict dynCnt tickE (const (+1))
-  logInfoE $ ffor (updated . uniqDyn $ dynCnt') $ \n -> "Counter state: " <> showl n
+  dynCntU <- holdUniqDyn dynCnt'
+  logInfoE $ ffor (updated dynCntU) $ \n -> "Counter state: " <> showl n
 
 -- Client application.
 -- The application should be generic in the host monad that is used
@@ -104,15 +105,18 @@ main = do
         Client host serv -> appClient host serv
         Server port -> appServer port
       opts = case mode of
-        Client _ _ -> defaultSyncOptions netopts & syncOptionsRole .~ SyncSlave
-        Server _ -> defaultSyncOptions netopts & syncOptionsRole .~ SyncMaster
+        Client _ _ -> defaultSyncOptions & syncOptionsRole .~ SyncSlave
+        Server _ -> defaultSyncOptions & syncOptionsRole .~ SyncMaster
       tcpOpts = TCPBackendOpts {
-          tcpHostName = "localhost"
+          tcpHostName = "127.0.0.1"
         , tcpServiceName = case mode of
              Client _ _ -> ""
              Server port -> port
         , tcpParameters = defaultTCPParameters
         , tcpDuplexHints = defaultConnectHints
         }
-      netopts = (defaultNetworkOptions tcpOpts ()) { networkOptsDetailedLogging = False }
-  runSpiderHost $ hostApp $ runModule opts (app :: AppMonad ())
+      netopts = (defaultNetworkOptions tcpOpts) { networkOptsDetailedLogging = False }
+  mres <- runGM $ runLoggerT $ runNetworkT netopts $ runSyncT opts (app :: AppMonad ())
+  case mres of
+    Left er -> print $ renderNetworkError er
+    Right _ -> pure ()

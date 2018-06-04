@@ -15,7 +15,6 @@ module Game.GoreAndAsh.Sync.Options(
   , syncOptionsChannel
   , syncOptionsCollectionsChannel
   , syncOptionsResolveDelay
-  , syncOptionsNext
   , defaultSyncOptions
   ) where
 
@@ -32,7 +31,7 @@ data SyncRole =
   deriving (Generic, Show, Eq, Enum, Bounded)
 
 -- | Startup options of the sync module
-data SyncOptions s = SyncOptions {
+data SyncOptions = SyncOptions {
   -- | Defines role of the node (use slave for clients, and master for servers)
   _syncOptionsRole               :: SyncRole
   -- | Network channel to use for synchronization messages
@@ -45,8 +44,6 @@ data SyncOptions s = SyncOptions {
 , _syncOptionsCollectionsChannel :: ChannelId
   -- | Delays between messages for resolving a name of sync object
 , _syncOptionsResolveDelay       :: NominalDiffTime
-  -- | Options of next underlying module
-, _syncOptionsNext               :: s
 } deriving (Generic, Show)
 
 makeLenses ''SyncOptions
@@ -59,14 +56,12 @@ makeLenses ''SyncOptions
 -- , _syncOptionsChannel = ChannelId 1
 -- , _syncOptionsCollectionsChannel = ChannelId 2
 -- , _syncOptionsResolveDelay = realToFrac (5 :: Double)
--- , _syncOptionsNext = s
 -- }
 -- @
-defaultSyncOptions :: s -> SyncOptions s
-defaultSyncOptions s = SyncOptions {
+defaultSyncOptions :: SyncOptions
+defaultSyncOptions = SyncOptions {
     _syncOptionsRole = SyncSlave
   , _syncOptionsChannel = ChannelId 1
   , _syncOptionsCollectionsChannel = ChannelId 2
   , _syncOptionsResolveDelay = realToFrac (5 :: Double)
-  , _syncOptionsNext = s
   }

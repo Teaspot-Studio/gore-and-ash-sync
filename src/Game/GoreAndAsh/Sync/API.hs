@@ -77,10 +77,10 @@ import qualified Data.Map.Strict as M
 -- | Bijection between name and id of synchronized object
 type NameMap = H.HashMap SyncName SyncId
 
-class (MonadAppHost t m, TimerMonad t m, LoggingMonad t m, MonadMask m)
+class (MonadGame t m, LoggingMonad t m)
   => SyncMonad t b m | m -> t, m -> b where
     -- | Get settings of the module
-    syncOptions :: m (SyncOptions ())
+    syncOptions :: m SyncOptions
     -- | Get map of known names on the node
     syncKnownNames :: m (Dynamic t NameMap)
     -- | Return current scope sync object of synchronization object
@@ -144,7 +144,7 @@ syncWithName name a0 = syncWithNameWith name (pure a0)
 syncUnregisterName :: (SyncMonad t b m)
   => Event t SyncName -- ^ Fires when you want to delete a synchronization object
   -> m (Event t SyncName) -- ^ Return the event that fires after deletion of given name
-syncUnregisterName e = performAppHost $ ffor e $ \name -> do
+syncUnregisterName e = performNetwork $ ffor e $ \name -> do
   syncUnsafeDelId name
   return name
 
@@ -152,11 +152,11 @@ syncUnregisterName e = performAppHost $ ffor e $ \name -> do
 syncUnregisterNames :: (SyncMonad t b m, Foldable f)
   => Event t (f SyncName) -- ^ Fires when you want to delete a batch of synchronization objects
   -> m (Event t (f SyncName)) -- ^ Return the event that fires after deletion of given names
-syncUnregisterNames e = performAppHost $ ffor e $ \names -> do
+syncUnregisterNames e = performNetwork $ ffor e $ \names -> do
   mapM_ syncUnsafeDelId names
   return names
 
-instance {-# OVERLAPPABLE #-} (MonadAppHost t (mt m), MonadMask (mt m), MonadTransControl mt, SyncMonad t b m, TimerMonad t m, LoggingMonad t m)
+instance {-# OVERLAPPABLE #-} (MonadTrans mt, MonadTransControl mt, MonadGame t (mt m), MonadMask (mt m), SyncMonad t b m, LoggingMonad t m)
   => SyncMonad t b (mt m) where
     syncOptions = lift syncOptions
     {-# INLINE syncOptions #-}
@@ -229,7 +229,7 @@ sendSyncPayload :: forall t m a b . (SyncMonad t b m, NetworkMonad t b m, Store 
   -> Event t a -- ^ Payload
   -> m (Event t ())
 sendSyncPayload peer chan mt i itemId ea = do
-  msgE <- performAppHost $ ffor ea $ \a -> do
+  msgE <- performNetwork $ ffor ea $ \a -> do
     c <- syncIncSendCounter peer
     return (mt, encodeSyncMessage i itemId c a)
   peerChanSend peer chan msgE
@@ -279,7 +279,7 @@ syncToClientsManual :: (SyncMonad t b m, NetworkServer t b m, Store a, Foldable 
   -- event fires.
   -> m (Event t ())
   -- ^ Returns event that fires when a value was synced to given peers
-syncToClientsManual peers itemId mt da manualE = dynAppHost $ mapM_ (syncToClientManual itemId mt da manualE) <$> peers
+syncToClientsManual peers itemId mt da manualE = networkView $ mapM_ (syncToClientManual itemId mt da manualE) <$> peers
 
 -- | Start streaming given dynamic value to all connected clients.
 --
@@ -299,7 +299,7 @@ syncToClients :: (SyncMonad t b m, NetworkServer t b m, Store a, Foldable f)
   -- internal behavior isn't changed.
   -> m (Event t ())
   -- ^ Returns event that fires when a value was synced to given peers
-syncToClients peers itemId mt da = dynAppHost $ mapM_ (syncToClient itemId mt da) <$> peers
+syncToClients peers itemId mt da = networkView $ mapM_ (syncToClient itemId mt da) <$> peers
 
 -- | Start streaming given dynamic value to all connected clients.
 --
@@ -369,7 +369,7 @@ sendToClients :: (SyncMonad t b m, NetworkServer t b m, Store a, Foldable f)
   -- ^ Each time the event fires the content in sended to remote peer.
   -> m (Event t ())
   -- ^ Returns event that fires when a value was synced to given peers
-sendToClients peers itemId mt ea = dynAppHost $ mapM_ (sendToClient itemId mt ea) <$> peers
+sendToClients peers itemId mt ea = networkView $ mapM_ (sendToClient itemId mt ea) <$> peers
 
 -- | Send given high-level message to all connected peers.
 --
@@ -438,7 +438,7 @@ sendToClientsMany :: (SyncMonad t b m, NetworkServer t b m, Store a, Foldable f1
   -- ^ Each time the event fires the content in sended to remote peer.
   -> m (Event t ())
   -- ^ Returns event that fires when a value was synced to given peers
-sendToClientsMany peers itemId mt eas = dynAppHost $ mapM_ (sendToClientMany itemId mt eas) <$> peers
+sendToClientsMany peers itemId mt eas = networkView $ mapM_ (sendToClientMany itemId mt eas) <$> peers
 
 -- | Send given high-level message to all connected peers.
 --
@@ -512,7 +512,7 @@ syncFromClients :: forall t m a b f . (SyncMonad t b m, NetworkServer t b m, Sto
   --
   -- Note: see 'syncFromClient' result type.
 syncFromClients peersDyn itemId mkInit rejectE = do
-  switchedMap :: Event t (Dynamic t (Map (Peer b) a), Event t (Map (Peer b) (a, a))) <- dynAppHost $ go <$> peersDyn
+  switchedMap :: Event t (Dynamic t (Map (Peer b) a), Event t (Map (Peer b) (a, a))) <- networkView $ go <$> peersDyn
   dynPair <- holdDyn (pure mempty, never) switchedMap
   return (join . fmap fst $ dynPair, switchPromptlyDyn . fmap snd $ dynPair)
   where
@@ -576,7 +576,7 @@ receiveFromClients :: forall t m a b f . (SyncMonad t b m, NetworkServer t b m, 
   -> m (Event t (Map (Peer b) a))
   -- ^ Collected state for each Peer.
 receiveFromClients peersDyn itemId = do
-  switchE <- dynAppHost $ go <$> peersDyn
+  switchE <- networkView $ go <$> peersDyn
   switchHold never switchE
   where
     go :: f (Peer b) -> m (Event t (Map (Peer b) a))
@@ -810,7 +810,7 @@ syncPeerMessage peer i itemId = do
       then Just (c, bs)
       else Nothing
     _ -> Nothing
-  notLateE <- fmap (fmapMaybe id) $ performAppHost $ ffor msgE $ \(c, bs) -> do
+  notLateE <- fmap (fmapMaybe id) $ performNetwork $ ffor msgE $ \(c, bs) -> do
     notLate <- syncCheckReceiveCounter peer c
     return $ if notLate then Just bs else Nothing
   logEitherWarn $ ffor notLateE $ first mkDecodeFailMsg . decode
@@ -874,7 +874,7 @@ resolveSyncName peer name im m = do
       let chan = opts ^. syncOptionsChannel
           requestE = leftmost [tickE, buildE]
       _ <- requestSyncId peer chan $ const name <$> requestE
-      holdAppHost im $ fmap m resolvedE
+      networkHold im $ fmap m resolvedE
 
 -- | Helper that sends message to server with request to send back id of given
 -- sync object.
@@ -916,5 +916,5 @@ syncService = do
       logVerboseE $ ffor respE $ \(name, i) -> "Sync: registering '"
         <> showl name <> "' <=> '"
         <> showl i <> "'"
-      void $ performAppHost $ ffor respE $ uncurry syncUnsafeAddId
+      void $ performNetwork $ ffor respE $ uncurry syncUnsafeAddId
     SyncMaster -> return () -- not interested in on server

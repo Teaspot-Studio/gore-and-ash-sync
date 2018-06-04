@@ -34,7 +34,7 @@ import Game.GoreAndAsh.Sync.Options
 
 -- | Make collection that infroms clients about component creation/removing
 hostCollection :: forall k v v' a b t m .
-    ( Ord k, Store k, Store v', MonadAppHost t m
+    ( Ord k, Store k, Store v', MonadGame t m
     , NetworkServer t b m, SyncMonad t b m)
   => SyncItemId -- ^ ID of collection in current scope
   -> Dynamic t (S.Set (Peer b)) -- ^ Set of peers that are allowed to get info about collection and that receives incremental updates.
@@ -78,14 +78,14 @@ hostCollection itemId peersDyn initialMap addDelMap toClientVal makeComponent = 
         return $ flip F.foldMap peers $ \peer -> M.elems $ M.mapWithKey (makeMsg peer) m
   _ <- msgSendMany updMsgsE
   -- local collection
-  holdKeyCollection initialMap addDelMap makeComponent
+  listHoldWithKey initialMap addDelMap makeComponent
 
 -- | Make collection that infroms clients about component creation/removing
 --
 -- Simplified version of 'hostCollection' which doesn't provide control
 -- over peers and start value projection for clients.
 hostSimpleCollection :: forall k v a b t m .
-    ( Ord k, Store k, Store v, MonadAppHost t m
+    ( Ord k, Store k, Store v, MonadGame t m
     , NetworkServer t b m, SyncMonad t b m)
   => SyncItemId -- ^ ID of collection in current scope
   -> Map k v -- ^ Initial set of components
@@ -98,7 +98,7 @@ hostSimpleCollection itemId initialMap updatesE makeComponent = do
 
 -- | Make a client-side version of 'hostCollection' receive messages when
 -- server adds-removes components and mirror them localy by local component.
-remoteCollection :: (Ord k, Store k, Store v, MonadAppHost t m, NetworkClient t b m, SyncMonad t b m)
+remoteCollection :: (Ord k, Store k, Store v, MonadGame t m, NetworkClient t b m, SyncMonad t b m)
   => SyncItemId -- ^ ID of collection in current scope
   -> (k -> v -> m a) -- ^ Contructor of client widget
   -- | Returns resulted collected outputs from components and update map.
@@ -121,7 +121,7 @@ remoteCollection itemId makeComponent = fmap joinPair $ whenConnected (pure memp
           RemoteComponentDelete{..} -> Just $ M.singleton remoteComponentKey Nothing
           _ -> Nothing
     -- local collection
-    cmpsDyn <- holdKeyCollection mempty updMapE makeComponent
+    cmpsDyn <- listHoldWithKey mempty updMapE makeComponent
     return (cmpsDyn, updMapE)
   where
     joinPair dp = (join $ fst <$> dp, switchPromptlyDyn $ snd <$> dp)

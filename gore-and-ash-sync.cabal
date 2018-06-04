@@ -1,5 +1,5 @@
 name:                gore-and-ash-sync
-version:             2.0.1.0
+version:             3.0.0.0
 synopsis:            Gore&Ash module for high level network synchronization
 description:         Please see README.md
 homepage:            https://github.com/Teaspot-Studio/gore-and-ash-sync
@@ -42,9 +42,9 @@ library
    , bytestring               >= 0.10     && < 0.11
    , containers               >= 0.5      && < 0.6
    , exceptions               >= 0.8      && < 0.9
-   , gore-and-ash             >= 2.0      && < 2.1
-   , gore-and-ash-logging     >= 3.0      && < 3.1
-   , gore-and-ash-network     >= 2.0      && < 2.1
+   , gore-and-ash             >= 3.0      && < 3.1
+   , gore-and-ash-logging     >= 4.0      && < 4.1
+   , gore-and-ash-network     >= 3.0      && < 3.1
    , lens                     >= 4.14     && < 4.17
    , monad-control            >= 1.0      && < 1.1
    , mtl                      >= 2.2      && < 2.3
@@ -85,11 +85,11 @@ executable gore-and-ash-sync-example01
   build-depends:
       base                  >= 4.7      && < 5
     , exceptions            >= 0.8      && < 0.9
-    , gore-and-ash          >= 2.0      && < 2.1
-    , gore-and-ash-logging  >= 3.0      && < 3.1
-    , gore-and-ash-network  >= 2.0      && < 2.1
+    , gore-and-ash          >= 3.0      && < 3.1
+    , gore-and-ash-logging  >= 4.0      && < 4.1
+    , gore-and-ash-network  >= 3.0      && < 3.1
     , gore-and-ash-sync
-    , lens                  >= 4.14     && < 4.16
+    , lens                  >= 4.14     && < 4.17
     , mtl                   >= 2.2      && < 2.3
     , network               >= 2.6      && < 2.7
 
@@ -123,11 +123,11 @@ executable gore-and-ash-sync-example02
   build-depends:
       base                  >= 4.7      && < 5
     , exceptions            >= 0.8      && < 0.9
-    , gore-and-ash          >= 2.0      && < 2.1
-    , gore-and-ash-logging  >= 3.0      && < 3.1
-    , gore-and-ash-network  >= 2.0      && < 2.1
+    , gore-and-ash          >= 3.0      && < 3.1
+    , gore-and-ash-logging  >= 4.0      && < 4.1
+    , gore-and-ash-network  >= 3.0      && < 3.1
     , gore-and-ash-sync
-    , lens                  >= 4.14     && < 4.16
+    , lens                  >= 4.14     && < 4.17
     , mtl                   >= 2.2      && < 2.3
     , network               >= 2.6      && < 2.7
 
@@ -161,11 +161,11 @@ executable gore-and-ash-sync-example03
   build-depends:
       base                  >= 4.7      && < 5
     , exceptions            >= 0.8      && < 0.9
-    , gore-and-ash          >= 2.0      && < 2.1
-    , gore-and-ash-logging  >= 3.0      && < 3.1
-    , gore-and-ash-network  >= 2.0      && < 2.1
+    , gore-and-ash          >= 3.0      && < 3.1
+    , gore-and-ash-logging  >= 4.0      && < 4.1
+    , gore-and-ash-network  >= 3.0      && < 3.1
     , gore-and-ash-sync
-    , lens                  >= 4.14     && < 4.16
+    , lens                  >= 4.14     && < 4.17
     , mtl                   >= 2.2      && < 2.3
     , network               >= 2.6      && < 2.7
 
@@ -199,11 +199,11 @@ executable gore-and-ash-sync-example04
   build-depends:
       base                  >= 4.7      && < 5
     , exceptions            >= 0.8      && < 0.9
-    , gore-and-ash          >= 2.0      && < 2.1
-    , gore-and-ash-logging  >= 3.0      && < 3.1
-    , gore-and-ash-network  >= 2.0      && < 2.1
+    , gore-and-ash          >= 3.0      && < 3.1
+    , gore-and-ash-logging  >= 4.0      && < 4.1
+    , gore-and-ash-network  >= 3.0      && < 3.1
     , gore-and-ash-sync
-    , lens                  >= 4.14     && < 4.16
+    , lens                  >= 4.14     && < 4.17
     , mtl                   >= 2.2      && < 2.3
     , network               >= 2.6      && < 2.7
 
@@ -237,11 +237,11 @@ executable gore-and-ash-sync-example05
   build-depends:
       base                  >= 4.7      && < 5
     , exceptions            >= 0.8      && < 0.9
-    , gore-and-ash          >= 2.0      && < 2.1
-    , gore-and-ash-logging  >= 3.0      && < 3.1
-    , gore-and-ash-network  >= 2.0      && < 2.1
+    , gore-and-ash          >= 3.0      && < 3.1
+    , gore-and-ash-logging  >= 4.0      && < 4.1
+    , gore-and-ash-network  >= 3.0      && < 3.1
     , gore-and-ash-sync
-    , lens                  >= 4.14     && < 4.16
+    , lens                  >= 4.14     && < 4.17
     , mtl                   >= 2.2      && < 2.3
     , network               >= 2.6      && < 2.7
 
@@ -276,11 +276,11 @@ executable gore-and-ash-sync-example06
       base                  >= 4.7      && < 5
     , containers            >= 0.5      && < 0.6
     , exceptions            >= 0.8      && < 0.9
-    , gore-and-ash          >= 2.0      && < 2.1
-    , gore-and-ash-logging  >= 3.0      && < 3.1
-    , gore-and-ash-network  >= 2.0      && < 2.1
+    , gore-and-ash          >= 3.0      && < 3.1
+    , gore-and-ash-logging  >= 4.0      && < 4.1
+    , gore-and-ash-network  >= 3.0      && < 3.1
     , gore-and-ash-sync
-    , lens                  >= 4.14     && < 4.16
+    , lens                  >= 4.14     && < 4.17
     , mtl                   >= 2.2      && < 2.3
     , network               >= 2.6      && < 2.7
 

@@ -20,6 +20,7 @@ of network module, client and server allocated channels count must match.
 -}
 module Game.GoreAndAsh.Sync(
     SyncT
+  , runSyncT
   -- * Options
   , SyncRole(..)
   , SyncOptions
@@ -27,7 +28,6 @@ module Game.GoreAndAsh.Sync(
   , syncOptionsChannel
   , syncOptionsCollectionsChannel
   , syncOptionsResolveDelay
-  , syncOptionsNext
   , defaultSyncOptions
   -- * API
   , SyncName

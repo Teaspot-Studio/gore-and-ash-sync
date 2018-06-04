@@ -26,7 +26,7 @@ import qualified Data.List as L
 import qualified Data.Map.Strict as M
 
 -- | Application monad that is used for implementation of game API
-type AppMonad = SyncT Spider TCPBackend (TimerT Spider (NetworkT Spider TCPBackend (LoggingT Spider (GameMonad Spider))))
+type AppMonad = SyncT Spider TCPBackend (NetworkT Spider TCPBackend (LoggingT Spider GMSpider))
 
 -- | ID of collection object that is same on clients and server
 collectionId :: SyncItemId
@@ -56,7 +56,8 @@ serverLogic = do
     countersMapDyn <- hostSimpleCollection collectionId initalCnts updatesE makeSharedCounter
     let countersCountDyn = fmap length countersMapDyn
   let countersDyn = flattenCountersMap =<< countersMapDyn
-  logInfoE $ ffor (updated $ uniqDyn countersDyn) $ \ns -> "Counters state: " <> showl ns
+  countersDynU <- holdUniqDyn countersDyn
+  logInfoE $ ffor (updated countersDynU) $ \ns -> "Counters state: " <> showl ns
   where
   initialCounters :: Int -> CounterMap
   initialCounters n = M.fromList $ ffor [0 .. n-1] $ \i -> (i, i)
@@ -109,7 +110,8 @@ clientLogic :: forall t m . (LoggingMonad t m, SyncMonad t TCPBackend m, Network
 clientLogic = do
   (countersMapDyn, _) <- remoteCollection collectionId makeSharedCounter
   let countersDyn = flattenCountersMap =<< countersMapDyn
-  logInfoE $ ffor (updated $ uniqDyn countersDyn) $ \ns -> "Counters state: " <> showl ns
+  countersDynU <- holdUniqDyn countersDyn
+  logInfoE $ ffor (updated countersDynU) $ \ns -> "Counters state: " <> showl ns
   where
   makeSharedCounter :: Int -> Int -> m (Dynamic t Int)
   makeSharedCounter i = syncFromServer (fromIntegral i)
@@ -144,15 +146,18 @@ main = do
         Client host serv -> appClient host serv
         Server port -> appServer port
       opts = case mode of
-        Client _ _ -> defaultSyncOptions netopts & syncOptionsRole .~ SyncSlave
-        Server _ -> defaultSyncOptions netopts & syncOptionsRole .~ SyncMaster
+        Client _ _ -> defaultSyncOptions & syncOptionsRole .~ SyncSlave
+        Server _ -> defaultSyncOptions & syncOptionsRole .~ SyncMaster
       tcpOpts = TCPBackendOpts {
-          tcpHostName = "localhost"
+          tcpHostName = "127.0.0.1"
         , tcpServiceName = case mode of
              Client _ _ -> ""
              Server port -> port
         , tcpParameters = defaultTCPParameters
         , tcpDuplexHints = defaultConnectHints
         }
-      netopts = (defaultNetworkOptions tcpOpts ()) { networkOptsDetailedLogging = False }
-  runSpiderHost $ hostApp $ runModule opts (app :: AppMonad ())
+      netopts = (defaultNetworkOptions tcpOpts) { networkOptsDetailedLogging = False }
+  mres <- runGM $ runLoggerT $ runNetworkT netopts $ runSyncT opts (app :: AppMonad ())
+  case mres of
+    Left er -> print $ renderNetworkError er
+    Right _ -> pure ()

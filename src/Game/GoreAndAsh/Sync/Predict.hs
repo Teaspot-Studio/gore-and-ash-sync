@@ -24,7 +24,7 @@ import Game.GoreAndAsh.Time
 
 -- | Make predictions about next value of dynamic. This helper should be handy
 -- for implementing client side prediction of values from server.
-predict :: (MonadAppHost t m)
+predict :: (MonadGame t m)
   => Dynamic t a
   -- ^ Original dynamic. Common case is dynamic from 'syncFromServer' function.
   -> Event t b
@@ -37,14 +37,14 @@ predict :: (MonadAppHost t m)
   -- ^ Resulted predicted dynamic value. Each time original event fires, all
   -- predicted values are substituted with the new one.
 predict origDyn tickE predictFunc = do
-  dynDyn <- holdAppHost (pure origDyn) (predict' <$> updated origDyn)
+  dynDyn <- networkHold (pure origDyn) (predict' <$> updated origDyn)
   return $ join dynDyn
   where
     predict' a = foldDyn predictFunc a tickE
 
 -- | Make predictions about next value of dynamic. This helper should be handy
 -- for implementing client side prediction of values from server.
-predictMaybe :: (MonadAppHost t m)
+predictMaybe :: (MonadGame t m)
   => Dynamic t a
   -- ^ Original dynamic. Common case is dynamic from 'syncFromServer' function.
   -> Event t b
@@ -57,14 +57,14 @@ predictMaybe :: (MonadAppHost t m)
   -- ^ Resulted predicted dynamic value. Each time original event fires, all
   -- predicted values are substituted with the new one.
 predictMaybe origDyn tickE predictFunc = do
-  dynDyn <- holdAppHost (pure origDyn) (predict' <$> updated origDyn)
+  dynDyn <- networkHold (pure origDyn) (predict' <$> updated origDyn)
   return $ join dynDyn
   where
     predict' a = foldDynMaybe predictFunc a tickE
 
 -- | Make predictions about next value of dynamic. This helper should be handy
 -- for implementing client side prediction of values from server.
-predictM :: (MonadAppHost t m)
+predictM :: (MonadGame t m)
   => Dynamic t a
   -- ^ Original dynamic. Common case is dynamic from 'syncFromServer' function.
   -> Event t b
@@ -80,12 +80,12 @@ predictM origDyn tickE predictFunc = do
   a <- sample . current $ origDyn
   let mkStep v = foldDynM predictFunc v tickE
   initialDyn <- mkStep a
-  dynDyn <- holdAppHost (pure initialDyn) $ mkStep <$> updated origDyn
+  dynDyn <- networkHold (pure initialDyn) $ mkStep <$> updated origDyn
   return $ join dynDyn
 
 -- | Make predictions about next value of dynamic. This helper should be handy
 -- for implementing client side prediction of values from server.
-predictMaybeM :: (MonadAppHost t m)
+predictMaybeM :: (MonadGame t m)
   => Dynamic t a
   -- ^ Original dynamic. Common case is dynamic from 'syncFromServer' function.
   -> Event t b
@@ -98,14 +98,14 @@ predictMaybeM :: (MonadAppHost t m)
   -- ^ Resulted predicted dynamic value. Each time original event fires, all
   -- predicted values are substituted with the new one.
 predictMaybeM origDyn tickE predictFunc = do
-  dynDyn <- holdAppHost (pure origDyn) (predict' <$> updated origDyn)
+  dynDyn <- networkHold (pure origDyn) (predict' <$> updated origDyn)
   return $ join dynDyn
   where
     predict' a = foldDynMaybeM predictFunc a tickE
 
 -- | Make predictions about next value of dynamic. This helper should be handy
 -- for implementing client side prediction of values from server.
-predictInterpolateM :: forall t m a b . (MonadAppHost t m, TimerMonad t m, Fractional a)
+predictInterpolateM :: forall t m a b . (MonadGame t m, Fractional a)
   => Int -- ^ Number of intermediate values
   -> (a -> m (Maybe NominalDiffTime))
   -- ^ Time interval in which all interpolation have to be performed, depends on difference
@@ -143,13 +143,13 @@ predictInterpolateM n mkDt origDyn tickE predictFunc = do
             let nextE = flip pushAlways stopE $ const $ do
                   v <- sample . current $ resDyn -- start from last interpolated
                   return $ mkPredictStep v
-            resDyn <- join <$> holdAppHost (pure interDyn) nextE
+            resDyn <- join <$> networkHold (pure interDyn) nextE
           return resDyn
 
   -- Initial dynamic without interpolation
   a <- sample . current $ origDyn
   initialDyn <- mkPredictStep a
   rec
-    dynDyn <- holdAppHost (pure initialDyn) $ mkInterpStep interpDyn <$> updated origDyn
+    dynDyn <- networkHold (pure initialDyn) $ mkInterpStep interpDyn <$> updated origDyn
     let interpDyn = join dynDyn
   return interpDyn
