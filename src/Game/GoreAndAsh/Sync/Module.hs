@@ -15,7 +15,6 @@ module Game.GoreAndAsh.Sync.Module(
 
 import Control.Lens ((&), (.~), (^.))
 import Control.Monad.Base
-import Control.Monad.Catch
 import Control.Monad.Except
 import Control.Monad.Reader
 import Control.Monad.Trans.Control

@@ -41,7 +41,6 @@ library
      base                     >= 4.7      && < 5
    , bytestring               >= 0.10     && < 0.11
    , containers               >= 0.5      && < 0.6
-   , exceptions               >= 0.8      && < 0.9
    , gore-and-ash             >= 3.0      && < 3.1
    , gore-and-ash-logging     >= 4.0      && < 4.1
    , gore-and-ash-network     >= 3.0      && < 3.1
@@ -84,7 +83,6 @@ executable gore-and-ash-sync-example01
   default-language:   Haskell2010
   build-depends:
       base                  >= 4.7      && < 5
-    , exceptions            >= 0.8      && < 0.9
     , gore-and-ash          >= 3.0      && < 3.1
     , gore-and-ash-logging  >= 4.0      && < 4.1
     , gore-and-ash-network  >= 3.0      && < 3.1
@@ -122,7 +120,6 @@ executable gore-and-ash-sync-example02
   default-language:   Haskell2010
   build-depends:
       base                  >= 4.7      && < 5
-    , exceptions            >= 0.8      && < 0.9
     , gore-and-ash          >= 3.0      && < 3.1
     , gore-and-ash-logging  >= 4.0      && < 4.1
     , gore-and-ash-network  >= 3.0      && < 3.1
@@ -160,7 +157,6 @@ executable gore-and-ash-sync-example03
   default-language:   Haskell2010
   build-depends:
       base                  >= 4.7      && < 5
-    , exceptions            >= 0.8      && < 0.9
     , gore-and-ash          >= 3.0      && < 3.1
     , gore-and-ash-logging  >= 4.0      && < 4.1
     , gore-and-ash-network  >= 3.0      && < 3.1
@@ -198,7 +194,6 @@ executable gore-and-ash-sync-example04
   default-language:   Haskell2010
   build-depends:
       base                  >= 4.7      && < 5
-    , exceptions            >= 0.8      && < 0.9
     , gore-and-ash          >= 3.0      && < 3.1
     , gore-and-ash-logging  >= 4.0      && < 4.1
     , gore-and-ash-network  >= 3.0      && < 3.1
@@ -236,7 +231,6 @@ executable gore-and-ash-sync-example05
   default-language:   Haskell2010
   build-depends:
       base                  >= 4.7      && < 5
-    , exceptions            >= 0.8      && < 0.9
     , gore-and-ash          >= 3.0      && < 3.1
     , gore-and-ash-logging  >= 4.0      && < 4.1
     , gore-and-ash-network  >= 3.0      && < 3.1
@@ -275,7 +269,6 @@ executable gore-and-ash-sync-example06
   build-depends:
       base                  >= 4.7      && < 5
     , containers            >= 0.5      && < 0.6
-    , exceptions            >= 0.8      && < 0.9
     , gore-and-ash          >= 3.0      && < 3.1
     , gore-and-ash-logging  >= 4.0      && < 4.1
     , gore-and-ash-network  >= 3.0      && < 3.1

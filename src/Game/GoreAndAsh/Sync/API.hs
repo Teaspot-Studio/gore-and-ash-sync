@@ -54,7 +54,6 @@ module Game.GoreAndAsh.Sync.API(
 
 import Control.Lens ((^.))
 import Control.Monad
-import Control.Monad.Catch
 import Control.Monad.Trans
 import Control.Monad.Trans.Control
 import Data.Bifunctor
@@ -156,7 +155,7 @@ syncUnregisterNames e = performNetwork $ ffor e $ \names -> do
   mapM_ syncUnsafeDelId names
   return names
 
-instance {-# OVERLAPPABLE #-} (MonadTrans mt, MonadTransControl mt, MonadGame t (mt m), MonadMask (mt m), SyncMonad t b m, LoggingMonad t m)
+instance {-# OVERLAPPABLE #-} (MonadTrans mt, MonadTransControl mt, MonadGame t (mt m), SyncMonad t b m, LoggingMonad t m)
   => SyncMonad t b (mt m) where
     syncOptions = lift syncOptions
     {-# INLINE syncOptions #-}
